@@ -38,7 +38,7 @@ set(_project "${CMAKE_CURRENT_SOURCE_DIR}/bridge_smoke/project")
 
 add_executable(bridge_smoke bridge_smoke/bridge_smoke.cc)
 target_include_directories(bridge_smoke PRIVATE ${_root}/include)
-target_link_libraries(bridge_smoke PRIVATE ${CMAKE_DL_LIBS})
+target_link_libraries(bridge_smoke PRIVATE Vulkan::Vulkan ${CMAKE_DL_LIBS})
 
 add_executable(pv_host_smoke pv_host_smoke/pv_host_smoke.cc
         ${_root}/plugin/src/codec.cc)
@@ -51,6 +51,11 @@ if (LIBGODOT)
     foreach (driver vulkan opengl3 opengl3_es)
         add_test(NAME bridge_${driver}
                 COMMAND bridge_smoke ${LIBGODOT} ${_project} ${driver})
+        add_test(NAME bridge_dmabuf_${driver}
+                COMMAND bridge_smoke ${LIBGODOT} ${_project} ${driver} dmabuf)
+        # Needs a dma-buf exporter (a GPU, or lavapipe with /dev/udmabuf).
+        set_tests_properties(bridge_dmabuf_${driver} PROPERTIES
+                SKIP_RETURN_CODE 77)
     endforeach ()
     if (IHS_GODOT_VIEW)
         foreach (driver vulkan opengl3 opengl3_es)
