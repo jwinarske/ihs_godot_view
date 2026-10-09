@@ -1,0 +1,14 @@
+build/
+out/
+*.o
+*.so
+*.so.*
+.dart_tool/
+.packages
+pubspec.lock
+.flutter-plugins
+.flutter-plugins-dependencies
+**/__pycache__/
+*.pyc
+.idea/
+.vscode/

@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="IhsHost" inherits="Object" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../../../doc/class.xsd">
+	<brief_description>
+		Message channel between a game and the Flutter app embedding it on ivi-homescreen.
+	</brief_description>
+	<description>
+		When Godot runs inside an ivi-homescreen platform view (the [code]ihs[/code] display driver), the embedding Flutter app can send strings to the game and receive strings from it. Messages are opaque; JSON is a convenient encoding.
+		[codeblock]
+		func _ready():
+		    IhsHost.message_received.connect(_on_host_message)
+		    IhsHost.send_message("ready")
+
+		func _on_host_message(message):
+		    print("from Flutter: ", message)
+		[/codeblock]
+	</description>
+	<tutorials>
+	</tutorials>
+	<methods>
+		<method name="is_embedded" qualifiers="const">
+			<return type="bool" />
+			<description>
+				Returns [code]true[/code] when the game runs under the [code]ihs[/code] display driver.
+			</description>
+		</method>
+		<method name="send_message">
+			<return type="void" />
+			<param index="0" name="message" type="String" />
+			<description>
+				Sends [param message] to the embedding app.
+			</description>
+		</method>
+	</methods>
+	<signals>
+		<signal name="message_received">
+			<param index="0" name="message" type="String" />
+			<description>
+				Emitted on the main thread when the embedding app sends a message.
+			</description>
+		</signal>
+	</signals>
+</class>
