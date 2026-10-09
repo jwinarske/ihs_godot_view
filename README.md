@@ -208,6 +208,13 @@ environment, which is convenient on a target:
     `TEXTURE_VK_IMAGE` across two VkDevices (the mock shell's and Godot's)
     with pixels read back on the shell's side; then dispose (no submit after
     it) and shutdown.
+  * The `bridge_dmabuf_*` variants import a dma-buf allocated on a separate
+    Vulkan device into Godot. They need a dma-buf exporter (a GPU, or
+    lavapipe with `/dev/udmabuf`) and report *skipped* without one.
+
+GPU-only paths (gbm rings, `DRM_PLANE`, `TEXTURE_EGL_IMAGE`, dma-buf import
+on real drivers) need a board or a desktop GPU with an ivi-homescreen
+compositor build to exercise.
 
 ```sh
 cmake -G Ninja -S test -B build/test -DCMAKE_PREFIX_PATH=<ihs prefix> \
