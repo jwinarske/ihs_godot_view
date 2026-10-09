@@ -162,6 +162,11 @@ if (CMAKE_CROSSCOMPILING OR CMAKE_C_COMPILER OR CMAKE_CXX_COMPILER)
     endif ()
     # emb's tuning (-mcpu=...) arrives in the toolchain's init flags.
     string(APPEND _ccflags " ${CMAKE_C_FLAGS_INIT} ${CMAKE_C_FLAGS}")
+    # CMake links with the compile flags too, and emb's carry the multiarch
+    # -B/-L that find crti.o and libc in a Debian sysroot. Then the
+    # toolchain's own link flags (-fuse-ld=lld, ...).
+    string(APPEND _linkflags " ${CMAKE_CXX_FLAGS_INIT} ${CMAKE_CXX_FLAGS}"
+           " ${CMAKE_SHARED_LINKER_FLAGS_INIT} ${CMAKE_SHARED_LINKER_FLAGS}")
     string(STRIP "${_ccflags}" _ccflags)
     string(STRIP "${_linkflags}" _linkflags)
     if (_ccflags)
@@ -197,7 +202,12 @@ else ()
 endif ()
 list(APPEND _args ${GODOT_SCONS_ARGS})
 
-set(_built "${_godot_src}/bin/libgodot.linuxbsd.${GODOT_TARGET}.${_arch}.so")
+# SCons switches to use_llvm for a clang CXX, and names the output .llvm.so.
+set(_llvm "")
+if (CMAKE_CXX_COMPILER MATCHES "clang[^/]*$")
+    set(_llvm ".llvm")
+endif ()
+set(_built "${_godot_src}/bin/libgodot.linuxbsd.${GODOT_TARGET}.${_arch}${_llvm}.so")
 set(_out "${CMAKE_CURRENT_BINARY_DIR}/libgodot.so")
 file(GLOB_RECURSE _module_sources CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/modules/*"
