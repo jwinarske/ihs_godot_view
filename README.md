@@ -107,6 +107,26 @@ compositor build, and without it registration fails with `-4`. Host tools for
 the libgodot module: `scons`, `python3` (`emb deps` installs them from the
 manifest's `deps:`).
 
+Requirements and known snags:
+
+* **emb 0.4.0 or later.** `embedder_exports`, which stages `libihs_shared` for
+  the producer to link, arrived in 0.4.0 (`emb update`).
+* **ivi-homescreen with ihs_pv ABI 1.21 or later** (`IHS_PV_KIND_TEXTURE_VK_IMAGE`,
+  ivi-homescreen c66c18ae, on `v3.0`). Older trees fail to compile
+  `plugin/src/surface_policy.cc`.
+* **A Flutter SDK whose engine emb can fetch.** emb stages the engine named by
+  the SDK's `bin/internal/engine.version`; for an SDK fork with no published
+  prebuilt, the build stops at `assembling bundle` (`emb engine` says why).
+* **`lib64` hosts (Fedora, ...), `--target local`.** The shell's install puts
+  `libihs_shared` under the overlay's `usr/lib64`, but emb points module builds
+  only at `usr/lib/pkgconfig`, so the producer reports *ivi-homescreen
+  ihs_shared not found*. Point CMake at the overlay:
+
+  ```sh
+  CMAKE_PREFIX_PATH=$FLUTTER_WORKSPACE/.config/flutter_workspace/overlay-x86_64-linux-gnu/usr \
+      emb cross ... --target local ...
+  ```
+
 ## Build by hand
 
 ```sh
@@ -139,6 +159,19 @@ hooks), so it tracks Godot master; move the pin deliberately.
    as libgodot (Project → Export → Linux → Export PCK/ZIP). For ARM targets
    enable ETC2/ASTC texture import
    (`rendering/textures/vram_compression/import_etc2_astc=true`).
+   The editor builds from the same checkout that the libgodot build fetched;
+   from the command line, with a `Linux` preset in `export_presets.cfg`:
+
+   ```sh
+   scons platform=linuxbsd target=editor          # in build/godot/godot-src
+   godot.linuxbsd.editor.x86_64 --headless --path tps-demo --import
+   godot.linuxbsd.editor.x86_64 --headless --path tps-demo \
+       --export-pack Linux "$PWD/tps-demo.pck"
+   ```
+
+   Exclude anything the game does not load (`exclude_filter`); the
+   `fluorite-game` fork's `port/` folder holds a Flutter bundle that adds
+   ~280 MiB to the pack.
 2. Put it at `<bundle>/data/flutter_assets/godot/tps-demo.pck`, or point
    `IHS_GODOT_MAIN_PACK` at it.
 3. Run the bundle: `./homescreen -b .` (`--backend drm-kms-vulkan` etc.).
@@ -150,6 +183,25 @@ are keyboard/mouse and gamepad; on a touch-only head unit the example's
 into the device is read by Godot itself (SDL). Mouse capture is reported to
 the app (`GodotController.mouseCaptured`) and look input uses the pointer's
 own deltas, so camera control keeps working at the view's edges.
+
+### Footprint
+
+Measured on a Ryzen 9 9950X's Radeon 610M iGPU (RADV, 2 CUs), Fedora,
+`wayland-vulkan` backend under GNOME, 1920×720 view, tps-demo main menu,
+release builds. A 10 s window after a 25 s warm-up; memory and GPU numbers
+are the homescreen process's (`smaps_rollup`, amdgpu DRM `fdinfo`).
+
+| Renderer | Surface | FPS | CPU | RSS | VRAM | GTT | GPU busy |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Forward+ | dmabuf | 33 | 8.4% | 703 MiB | 688 MiB | 168 MiB | 99% |
+| Forward+ | vk_image | n/m | 8.6% | 713 MiB | 661 MiB | 164 MiB | 99% |
+| Forward+ | shm | n/m | 10.0% | 714 MiB | 659 MiB | 168 MiB | 97% |
+| Mobile | dmabuf | 60 (vsync) | 11.3% | 387 MiB | 302 MiB | 168 MiB | 31% |
+
+CPU is a share of one core; n/m: not measured. On disk: `libgodot.so`
+104 MiB (template_release, no LTO), `libflutter_engine.so` 17 MiB, the
+producer 220 KiB, the pack 570 MiB (853 MiB with `port/`). Forward+ is
+GPU-bound on an iGPU; use Mobile there as on the Pi.
 
 ## Using it from Flutter
 
@@ -242,8 +294,10 @@ cmake --build build/test && ctest --test-dir build/test --output-on-failure
 * **HDR 2D on GL.** With `rendering/viewport/hdr_2d` on the compatibility
   renderer the capture blits linear values without sRGB encoding; the
   Vulkan path converts.
-* **Release templates** refuse `--path`; ship a `.pck` (or build with
-  `GODOT_PATH_OVERRIDES=ON` for development).
+* **Release templates** built with `disable_path_overrides` refuse
+  `--main-pack` as well as `--path`, and the producer passes the `.pck` with
+  `--main-pack`; so `GODOT_PATH_OVERRIDES` is `ON` by default. Turn it off
+  only if you load the game some other way.
 
 ## License
 
