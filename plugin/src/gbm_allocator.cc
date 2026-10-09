@@ -171,35 +171,48 @@ std::unique_ptr<DmabufBuffer> GbmAllocator::Allocate(uint32_t width,
   }
   const bool linear = modifier == kModLinear;
   constexpr uint32_t kTileRows = 64;
-  const uint32_t alloc_height =
+  const uint32_t padded_height =
       linear ? height : ((height + kTileRows - 1) / kTileRows) * kTileRows +
                             kTileRows;
   const uint32_t base_usage =
       kGbmBoUseRendering | (scanout ? kGbmBoUseScanout : 0u);
 
-  gbm_bo* bo = nullptr;
-  if (modifier != kModInvalid) {
-    // Which usage a driver accepts alongside a modifier varies, so try the
-    // narrow one before the broad one.
-    if (api_->bo_create_with_modifiers2 != nullptr) {
-      for (const uint32_t usage : {base_usage, kGbmBoUseRendering, 0u}) {
-        bo = api_->bo_create_with_modifiers2(device_, width, alloc_height,
-                                             fourcc, &modifier, 1, usage);
-        if (bo != nullptr) {
-          break;
+  auto create = [&](uint32_t alloc_height) -> gbm_bo* {
+    gbm_bo* bo = nullptr;
+    if (modifier != kModInvalid) {
+      // Which usage a driver accepts alongside a modifier varies, so try the
+      // narrow one before the broad one.
+      if (api_->bo_create_with_modifiers2 != nullptr) {
+        for (const uint32_t usage : {base_usage, kGbmBoUseRendering, 0u}) {
+          bo = api_->bo_create_with_modifiers2(device_, width, alloc_height,
+                                               fourcc, &modifier, 1, usage);
+          if (bo != nullptr) {
+            break;
+          }
         }
       }
+      if (bo == nullptr && api_->bo_create_with_modifiers != nullptr) {
+        bo = api_->bo_create_with_modifiers(device_, width, alloc_height,
+                                            fourcc, &modifier, 1);
+      }
+      if (bo == nullptr && linear) {
+        bo = api_->bo_create(device_, width, alloc_height, fourcc,
+                             base_usage | kGbmBoUseLinear);
+      }
+    } else {
+      bo = api_->bo_create(device_, width, alloc_height, fourcc, base_usage);
     }
-    if (bo == nullptr && api_->bo_create_with_modifiers != nullptr) {
-      bo = api_->bo_create_with_modifiers(device_, width, alloc_height, fourcc,
-                                          &modifier, 1);
-    }
-    if (bo == nullptr && linear) {
-      bo = api_->bo_create(device_, width, alloc_height, fourcc,
-                           base_usage | kGbmBoUseLinear);
-    }
-  } else {
-    bo = api_->bo_create(device_, width, alloc_height, fourcc, base_usage);
+    return bo;
+  };
+
+  gbm_bo* bo = create(padded_height);
+  // A modifier with metadata planes (AMD DCC, ...) places them after the
+  // padded rows, and the importer, which lays them out for @height, refuses
+  // the offsets. Those layouts are self-describing, so allocate them exact.
+  if (bo != nullptr && padded_height != height &&
+      api_->bo_get_plane_count != nullptr && api_->bo_get_plane_count(bo) > 1) {
+    api_->bo_destroy(bo);
+    bo = create(height);
   }
   if (bo == nullptr) {
     LOG_E("gbm allocation %ux%u fourcc %.4s modifier 0x%llx failed", width,
