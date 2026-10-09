@@ -22,6 +22,7 @@ typedef void *IhsEGLDeviceEXT;
 #define IHS_EGL_LINUX_DRM_FOURCC_EXT 0x3271
 #define IHS_EGL_PLATFORM_DEVICE_EXT 0x313F
 #define IHS_EGL_PLATFORM_SURFACELESS_MESA 0x31DD
+#define IHS_EGL_PLATFORM_GBM_KHR 0x31D7
 #define IHS_EGL_DRM_RENDER_NODE_FILE_EXT 0x3377
 #define IHS_EGL_SYNC_NATIVE_FENCE_ANDROID 0x3144
 #define IHS_EGL_NO_NATIVE_FENCE_FD_ANDROID -1
@@ -59,6 +60,10 @@ public:
 	EGLSurface surface = EGL_NO_SURFACE;
 	bool gles = false;
 	uint64_t render_device = 0;
+	// The GBM platform's device (Vivante, ...): the render node and the
+	// gbm_device opened on it, kept for the display's life.
+	int gbm_fd = -1;
+	void *gbm_device = nullptr;
 
 	CreateImageKHR create_image = nullptr;
 	DestroyImageKHR destroy_image = nullptr;
