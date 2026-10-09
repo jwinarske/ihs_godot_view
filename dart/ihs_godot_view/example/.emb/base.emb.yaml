@@ -60,8 +60,9 @@ cross:
         GODOT_LTO: "none"
         # Gamepads attached to the head unit, read by Godot's SDL driver.
         GODOT_SDL: "ON"
-        # Ship a .pck; --path is for development builds only.
-        GODOT_PATH_OVERRIDES: "OFF"
+        # The producer passes the .pck with --main-pack, which a release
+        # template refuses without path overrides.
+        GODOT_PATH_OVERRIDES: "ON"
 
     - name: ihs-godot-view
       path: ../../../../plugin

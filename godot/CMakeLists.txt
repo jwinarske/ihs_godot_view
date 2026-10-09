@@ -43,8 +43,10 @@ set(GODOT_TARGET "template_release" CACHE STRING
 set(GODOT_LTO "none" CACHE STRING "SCons lto: none | auto | thin | full")
 set(GODOT_SCONS_ARGS "" CACHE STRING "Extra SCons arguments (;-separated)")
 set(GODOT_JOBS "" CACHE STRING "SCons -j (default: CPU count)")
+# Release templates without path overrides refuse --main-pack as well as
+# --path, and the producer hands Godot its .pck with --main-pack.
 option(GODOT_PATH_OVERRIDES
-       "Allow --path in release builds (development; ship a .pck instead)" OFF)
+       "Allow --main-pack and --path in release builds (needed to run a .pck)" ON)
 option(GODOT_SDL "SDL3 input driver: gamepads read by Godot itself" ON)
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
