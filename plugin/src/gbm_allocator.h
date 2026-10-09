@@ -54,8 +54,9 @@ class GbmAllocator {
 
   // Allocate exactly @modifier (the granted one; the import fails on any
   // other). @scanout adds GBM_BO_USE_SCANOUT for a plane grant. A tiled
-  // modifier gets a tile of extra rows: the importer computes padded sizes a
-  // producer cannot, and refuses a buffer that is short (ivi-homescreen#598).
+  // single-plane modifier gets a tile of extra rows: the importer computes
+  // padded sizes a producer cannot, and refuses a buffer that is short
+  // (ivi-homescreen#598). Multi-plane layouts (DCC) are allocated exact.
   std::unique_ptr<DmabufBuffer> Allocate(uint32_t width,
                                          uint32_t height,
                                          uint32_t fourcc,
