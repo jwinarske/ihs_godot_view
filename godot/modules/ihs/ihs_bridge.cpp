@@ -229,7 +229,7 @@ void _set_window_size(uint32_t p_width, uint32_t p_height, float p_scale) {
 	if (p_width == 0 || p_height == 0) {
 		return;
 	}
-	const Size2i size(int(p_width), int(p_height));
+	const Size2i size{ int(p_width), int(p_height) };
 	const float scale = p_scale > 0.0f ? p_scale : 1.0f;
 	DisplayServerIhs *ds = DisplayServerIhs::get_ihs_singleton();
 	if (ds) {

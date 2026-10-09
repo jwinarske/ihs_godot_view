@@ -1,0 +1,16 @@
+config_version=5
+
+[application]
+
+config/name="ihs smoke"
+run/main_scene="res://main.tscn"
+
+[display]
+
+window/size/viewport_width=320
+window/size/viewport_height=240
+window/stretch/mode="canvas_items"
+
+[rendering]
+
+renderer/rendering_method="forward_plus"

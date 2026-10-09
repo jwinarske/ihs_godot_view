@@ -1,0 +1,21 @@
+name: ihs_godot_view_example
+description: The Godot third-person shooter demo inside a Flutter app on ivi-homescreen.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.4.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  ihs_godot_view:
+    path: ../
+
+dev_dependencies:
+  flutter_lints: ^4.0.0
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true
