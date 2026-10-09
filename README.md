@@ -203,6 +203,32 @@ CPU is a share of one core; n/m: not measured. On disk: `libgodot.so`
 producer 220 KiB, the pack 570 MiB (853 MiB with `port/`). Forward+ is
 GPU-bound on an iGPU; use Mobile there as on the Pi.
 
+### Boards
+
+tps-demo main menu, release builds, ETC2/ASTC pack:
+
+| GPU (driver) | Backend | Renderer | Surfaces granted | FPS |
+| --- | --- | --- | --- | --- |
+| Adreno 640 (Qualcomm) | drm-kms-vulkan | Mobile | dmabuf, vk_image, shm | 45 (shm 5) |
+| Adreno 640 (Qualcomm) | drm-kms-egl | Mobile | dmabuf, plane, egl_image | 45 |
+| V3D 7.1, Pi 5 (Mesa V3DV) | drm-kms-vulkan | Mobile, vertex shading | dmabuf, vk_image, shm | 27 at 1280×1440 |
+| V3D 7.1, Pi 5 (Mesa V3D) | drm-kms-vulkan | GL compatibility | dmabuf | 12 at 1280×1440 |
+| GC7000UL, i.MX 8M Plus (Vivante) | drm-kms-egl | Mobile | dmabuf | 4, 3D missing |
+| GC7000UL, i.MX 8M Plus (Vivante) | drm-kms-egl | GL compatibility | dmabuf | 1 at 1920×1080 |
+
+On the Pi 5 the Mobile renderer needs per-vertex lighting; put an
+`override.cfg` next to the `.pck`:
+
+```ini
+[rendering]
+
+shading/overrides/force_vertex_shading=true
+```
+
+The first launch compiles pipelines for a few minutes; Mesa's shader cache
+makes later launches start in seconds. See "Limits and notes" for the
+Vivante results.
+
 ## Using it from Flutter
 
 ```dart
@@ -304,6 +330,29 @@ cmake --build build/test && ctest --test-dir build/test --output-on-failure
   will refuse (multi-plane modifiers are allocated at the exact height). If
   you see that abort, the line before the fallback names the import that
   failed.
+* **V3DV and large fragment shaders (Pi 5).** Mesa's V3D register allocator
+  spills one temporary at a time and recomputes liveness after each spill,
+  so the Mobile renderer's per-pixel-lit fragment shaders take longer than
+  any practical wait to compile (none returned in 10 minutes) and no frame
+  is drawn. `force_vertex_shading` brings each pipeline to 5–12 s.
+* **Vivante GC7000UL (i.MX 8M Plus), Vulkan.** The driver rejects scene
+  pipelines at vertex/fragment link time with
+  `VK_ERROR_INVALID_SHADER_NV`, for two reasons:
+  * a stage that *declares* more than 16 sampled images
+    (`maxPerStageDescriptorSampledImages`), used or not. Godot's Mobile scene
+    shader declares 11 of its own plus an array, which leaves four for a
+    material; a StandardMaterial3D with normal, emission and ORM-packed
+    metallic/roughness/AO declares six (AO stays declared even on an
+    ORMMaterial3D);
+  * vertex stages rewritten by Godot's pipeline specializer (re-spirv).
+    Each module compiles on its own; the pair fails only with Godot's
+    pipeline state.
+
+  The meshes involved are not drawn. GL compatibility runs (the module takes
+  an EGL display on the GBM platform there), but the tps-demo's 3D comes out
+  scrambled; not yet narrowed down.
+  The driver's `drm-kms-vulkan` path is unusable for the shell (exports
+  cannot be scanned out), so use `drm-kms-egl`.
 * **Release templates** built with `disable_path_overrides` refuse
   `--main-pack` as well as `--path`, and the producer passes the `.pck` with
   `--main-pack`; so `GODOT_PATH_OVERRIDES` is `ON` by default. Turn it off
