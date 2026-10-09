@@ -294,6 +294,16 @@ cmake --build build/test && ctest --test-dir build/test --output-on-failure
 * **HDR 2D on GL.** With `rendering/viewport/hdr_2d` on the compatibility
   renderer the capture blits linear values without sRGB encoding; the
   Vulkan path converts.
+* **A refused EGLImage import can corrupt the heap (Mesa).** On Mesa 26.2.3
+  radeonsi, `eglCreateImageKHR` rejecting a dma-buf runs an error path in
+  `dri2_from_dma_bufs` that touches an object it has just freed (valgrind:
+  invalid read at offset 0 of a freed 184-byte block). The process later
+  aborts with `malloc(): unaligned tcache chunk detected`, usually in Godot's
+  render thread, right after *falling back to the software floor*. The
+  fallback cannot undo it, so the producer avoids handing Mesa buffers it
+  will refuse (multi-plane modifiers are allocated at the exact height). If
+  you see that abort, the line before the fallback names the import that
+  failed.
 * **Release templates** built with `disable_path_overrides` refuse
   `--main-pack` as well as `--path`, and the producer passes the `.pck` with
   `--main-pack`; so `GODOT_PATH_OVERRIDES` is `ON` by default. Turn it off

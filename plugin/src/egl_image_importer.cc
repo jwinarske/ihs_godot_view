@@ -111,6 +111,8 @@ void* EglImageImporter::Import(const DmabufBuffer& b) {
   attribs[n++] = kNone;
   void* image = create_(display_, nullptr, kLinuxDmaBuf, nullptr, attribs);
   if (image == nullptr) {
+    // Mesa 26.2 (radeonsi) touches freed memory on this failure path, and the
+    // heap may already be damaged; see README "Limits and notes".
     LOG_E("eglCreateImageKHR on the shell display failed");
   }
   return image;
