@@ -30,13 +30,13 @@
 cmake_minimum_required(VERSION 3.20)
 project(libgodot_ihs NONE)
 
-set(GODOT_GIT_URL "https://github.com/godotengine/godot.git"
-    CACHE STRING "Godot repository")
-# The engine revision the ihs module is built and tested against (4.7-dev,
-# DisplayServerEnums era). The module uses engine-internal C++ API, so move
-# this deliberately.
+# The engine revision the ihs module is built and tested against (master,
+# 4.7/4.8-dev, DisplayServerEnums era). The module uses engine-internal C++
+# API, so move this deliberately.
 set(GODOT_GIT_REF "2bbcb4960ed3a0efb12746f21660032b613f9c4c"
     CACHE STRING "Godot revision")
+set(GODOT_GIT_URL "https://github.com/godotengine/godot.git"
+    CACHE STRING "Godot repository")
 set(GODOT_SOURCE_DIR "" CACHE PATH "Existing Godot checkout (skips the fetch)")
 set(GODOT_TARGET "template_release" CACHE STRING
     "SCons target: template_release | template_debug")
@@ -65,17 +65,33 @@ endif ()
 if (GODOT_SOURCE_DIR)
     set(_godot_src "${GODOT_SOURCE_DIR}")
 else ()
-    include(FetchContent)
-    FetchContent_Declare(godot
-            GIT_REPOSITORY "${GODOT_GIT_URL}"
-            GIT_TAG "${GODOT_GIT_REF}"
-            GIT_SHALLOW FALSE
-            GIT_PROGRESS TRUE)
-    FetchContent_GetProperties(godot)
-    if (NOT godot_POPULATED)
-        FetchContent_Populate(godot)
+    # Fetch just the pinned commit (depth 1): FetchContent cannot shallow
+    # clone a SHA, and Godot's full history is gigabytes.
+    find_package(Git REQUIRED)
+    set(_godot_src "${CMAKE_CURRENT_BINARY_DIR}/godot-src")
+    set(_stamp "${_godot_src}/.ihs-godot-ref")
+    set(_have "")
+    if (EXISTS "${_stamp}")
+        file(READ "${_stamp}" _have)
     endif ()
-    set(_godot_src "${godot_SOURCE_DIR}")
+    if (NOT _have STREQUAL GODOT_GIT_REF)
+        message(STATUS "Fetching Godot ${GODOT_GIT_REF}")
+        file(REMOVE_RECURSE "${_godot_src}")
+        file(MAKE_DIRECTORY "${_godot_src}")
+        foreach (_cmd
+                "init;-q"
+                "remote;add;origin;${GODOT_GIT_URL}"
+                "fetch;--depth;1;origin;${GODOT_GIT_REF}"
+                "checkout;-q;FETCH_HEAD")
+            execute_process(COMMAND "${GIT_EXECUTABLE}" ${_cmd}
+                    WORKING_DIRECTORY "${_godot_src}"
+                    RESULT_VARIABLE _rc)
+            if (_rc)
+                message(FATAL_ERROR "git ${_cmd} failed (${_rc})")
+            endif ()
+        endforeach ()
+        file(WRITE "${_stamp}" "${GODOT_GIT_REF}")
+    endif ()
 endif ()
 if (NOT EXISTS "${_godot_src}/SConstruct")
     message(FATAL_ERROR "no Godot source at ${_godot_src}")
