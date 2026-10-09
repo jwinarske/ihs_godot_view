@@ -17,6 +17,8 @@
 #include "core/os/os.h"
 #include "servers/rendering/dummy/rasterizer_dummy.h"
 
+#include <unistd.h>
+
 #if defined(RD_ENABLED)
 #include "servers/rendering/rendering_device.h"
 #endif
@@ -176,8 +178,7 @@ DisplayServerIhs::~DisplayServerIhs() {
 			memdelete(capture_backend);
 			capture_backend = nullptr;
 		}
-		rendering_device->finalize();
-		memdelete(rendering_device);
+		memdelete(rendering_device); // Its destructor finalizes.
 		rendering_device = nullptr;
 	}
 	if (rendering_context) {

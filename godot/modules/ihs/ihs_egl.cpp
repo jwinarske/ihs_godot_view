@@ -10,6 +10,8 @@
 
 #include "ihs_state.h"
 
+#include "core/variant/variant.h"
+
 #include <sys/stat.h>
 #include <cstring>
 

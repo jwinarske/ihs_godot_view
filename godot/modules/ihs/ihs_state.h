@@ -8,6 +8,7 @@
 
 #include <ihs_godot/bridge.h>
 
+#include "core/math/vector2.h"
 #include "core/math/vector2i.h"
 #include "core/os/mutex.h"
 #include "core/string/ustring.h"

@@ -11,6 +11,7 @@
 #include "ihs_state.h"
 
 #include "core/string/print_string.h"
+#include "core/variant/variant.h"
 
 #include <sys/sysmacros.h>
 #include <cstring>
