@@ -12,7 +12,12 @@
 
 #include "core/variant/variant.h"
 
+#include <dirent.h>
+#include <dlfcn.h>
+#include <fcntl.h>
 #include <sys/stat.h>
+#include <unistd.h>
+#include <cstdio>
 #include <cstring>
 
 namespace {
@@ -43,6 +48,28 @@ uint64_t _rdev(const char *p_path) {
 		return 0;
 	}
 	return uint64_t(st.st_rdev);
+}
+
+// The /dev/dri/renderD* whose device number is @p_rdev, opened read-write.
+int _open_render_node(uint64_t p_rdev) {
+	DIR *dir = opendir("/dev/dri");
+	if (!dir) {
+		return -1;
+	}
+	int fd = -1;
+	while (const dirent *e = readdir(dir)) {
+		if (strncmp(e->d_name, "renderD", 7) != 0) {
+			continue;
+		}
+		char path[64];
+		snprintf(path, sizeof(path), "/dev/dri/%s", e->d_name);
+		if (_rdev(path) == p_rdev) {
+			fd = open(path, O_RDWR | O_CLOEXEC);
+			break;
+		}
+	}
+	closedir(dir);
+	return fd;
 }
 
 } // namespace
@@ -82,7 +109,26 @@ bool IhsEgl::initialize(bool p_gles, uint64_t p_render_device) {
 	if (display == EGL_NO_DISPLAY && get_platform_display && _has(client, "EGL_MESA_platform_surfaceless")) {
 		display = get_platform_display(IHS_EGL_PLATFORM_SURFACELESS_MESA, EGL_DEFAULT_DISPLAY, nullptr);
 	}
-	// 3. Whatever the default display is.
+	// 3. The GBM platform on the shell's render node, for an EGL with neither
+	// of the above (Vivante). libgbm is loaded here, not linked.
+	if (display == EGL_NO_DISPLAY && p_render_device != 0 && get_platform_display &&
+			(_has(client, "EGL_KHR_platform_gbm") || _has(client, "EGL_MESA_platform_gbm"))) {
+		void *libgbm = dlopen("libgbm.so.1", RTLD_NOW | RTLD_GLOBAL);
+		typedef void *(*GbmCreateDevice)(int);
+		auto gbm_create = libgbm ? reinterpret_cast<GbmCreateDevice>(dlsym(libgbm, "gbm_create_device")) : nullptr;
+		gbm_fd = gbm_create ? _open_render_node(p_render_device) : -1;
+		gbm_device = gbm_fd >= 0 ? gbm_create(gbm_fd) : nullptr;
+		if (!gbm_device && gbm_fd >= 0) {
+			close(gbm_fd);
+			gbm_fd = -1;
+		}
+		if (gbm_device) {
+			display = get_platform_display(IHS_EGL_PLATFORM_GBM_KHR, gbm_device, nullptr);
+			render_device = p_render_device;
+			IHS_LOG_INFO("EGL display on the GBM platform (the shell's render node)");
+		}
+	}
+	// 4. Whatever the default display is.
 	if (display == EGL_NO_DISPLAY) {
 		display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
 	}
@@ -194,6 +240,8 @@ void IhsEgl::finalize() {
 	}
 	eglTerminate(display);
 	display = EGL_NO_DISPLAY;
+	// The gbm_device and its fd are left open: Vivante's libEGL keeps every
+	// device handed to eglGetPlatformDisplay and destroys it itself at exit.
 }
 
 #endif // GLES3_ENABLED && EGL_ENABLED
