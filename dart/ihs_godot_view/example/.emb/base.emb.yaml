@@ -1,0 +1,73 @@
+# emb (toyota-connected/emb_cli) app layer for the ihs_godot_view example:
+# the Godot third-person shooter demo in a Flutter app on ivi-homescreen.
+#
+# This is an APP layer. It is merged over ivi-homescreen's own manifest
+# (backends, boards, embedder_exports: [shared]) when ivi-homescreen is built
+# with this app:
+#
+#   . $FLUTTER_WORKSPACE/setup_env.sh
+#   emb cross /path/to/ivi-homescreen --target local --build \
+#       --backend wayland-vulkan --define BUILD_COMPOSITOR=ON \
+#       --app /path/to/ihs_godot_view/dart/ihs_godot_view/example
+#
+# For a board, swap the target (`--target rpi5-trixie`, see
+# rpi5-trixie.emb.yaml) and the backend (drm-kms-vulkan, drm-kms-egl, ...).
+#
+# emb builds the two `modules` below with the target's toolchain and stages
+# their artifacts into the bundle's lib/, beside libflutter_engine.so:
+#
+#   libgodot          LibGodot + the `ihs` engine module. emb has no SCons
+#                     step, so ../../../../godot/CMakeLists.txt is a CMake front
+#                     that turns emb's toolchain into SCons arguments.
+#   ihs-godot-view    the ivi-homescreen platform-view producer. It finds
+#                     libihs_shared through the overlay ivi-homescreen's
+#                     embedder_exports stage before modules build, so it links
+#                     the same binary the bundle ships.
+#
+# Paths are relative to THIS directory (.emb/), not the app root.
+#
+# The game itself is not built here: export the .pck with the Godot editor of
+# the same version as the libgodot below (ETC2/ASTC textures for ARM targets)
+# and place it at data/flutter_assets/godot/tps-demo.pck in the bundle, or point
+# IHS_GODOT_MAIN_PACK at it. See the repository README.
+
+id: ihs_godot_view_example
+type: app
+supported_archs: [arm64, x86_64]
+supported_host_types: [ubuntu, fedora]
+
+# Host tools for the libgodot build (SCons drives it).
+deps:
+  linux:
+    ubuntu: [scons, python3, pkg-config]
+    fedora: [python3-scons, python3, pkgconf-pkg-config]
+
+cross:
+  provider: arm-gnu
+
+  defines:
+    # The platform-view host (ihs_pv_*) exists only in the compositor build;
+    # without it ihs_pv_register_factory fails with -4 (no registry).
+    BUILD_COMPOSITOR: "ON"
+
+  modules:
+    - name: libgodot
+      path: ../../../../godot
+      build: cmake
+      artifacts: [libgodot.so]
+      defines:
+        GODOT_TARGET: "template_release"
+        GODOT_LTO: "none"
+        # Gamepads attached to the head unit, read by Godot's SDL driver.
+        GODOT_SDL: "ON"
+        # The producer passes the .pck with --main-pack, which a release
+        # template refuses without path overrides.
+        GODOT_PATH_OVERRIDES: "ON"
+
+    - name: ihs-godot-view
+      path: ../../../../plugin
+      build: cmake
+      artifacts: [libihs_godot_view.so]
+      defines:
+        IHS_GODOT_VIEW_BUILD_TESTS: "OFF"
+        CMAKE_BUILD_TYPE: "Release"

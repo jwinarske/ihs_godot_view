@@ -1,0 +1,27 @@
+# Raspberry Pi 5 (Raspberry Pi OS trixie) for the ihs_godot_view example.
+#
+# An app layer over ivi-homescreen's rpi5-trixie target (same name, so emb
+# merges this onto it): the board's toolchain, image and cpu tuning come from
+# there; this adds what the two modules need in the sysroot.
+#
+#   emb cross /path/to/ivi-homescreen --target rpi5-trixie --build \
+#       --backend drm-kms-vulkan --define BUILD_COMPOSITOR=ON \
+#       --app /path/to/ihs_godot_view/dart/ihs_godot_view/example \
+#       --deploy pi@rpi5.local --run
+#
+# The Pi 5's V3D runs Godot's Forward+ renderer only slowly; the tps-demo is
+# far more usable exported with the Mobile renderer
+# (rendering/renderer/rendering_method="mobile") or run with
+# IHS_GODOT_RENDERING_METHOD=mobile.
+
+cross:
+  targets:
+    rpi5-trixie:
+      sysroot:
+        dev_packages:
+          # vulkan/vulkan.h for the producer (it calls Vulkan through the
+          # shell's loader, so only the headers are needed).
+          - libvulkan-dev
+      custom_device:
+        id: rpi5-godot
+        label: Raspberry Pi 5 (ihs_godot_view)
