@@ -1,0 +1,83 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  plugin:
+    name: producer plugin (build + unit tests)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: toyota-connected/ivi-homescreen
+          ref: v3.0
+          path: ivi-homescreen
+      - name: Host packages
+        run: sudo apt-get update && sudo apt-get install -y ninja-build libvulkan-dev
+      - name: ihs_shared (standalone)
+        run: |
+          cmake -G Ninja -S ivi-homescreen/shared -B build/ihs_shared \
+                -DCMAKE_BUILD_TYPE=Release -DENABLE_DLT=OFF \
+                -DCMAKE_INSTALL_PREFIX=$PWD/ihs_prefix
+          cmake --build build/ihs_shared && cmake --install build/ihs_shared
+      - name: Build and test
+        run: |
+          cmake -G Ninja -S plugin -B build/plugin -DCMAKE_PREFIX_PATH=$PWD/ihs_prefix
+          cmake --build build/plugin
+          ctest --test-dir build/plugin --output-on-failure
+
+  dart:
+    name: Dart package (analyze)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - run: flutter pub get && flutter analyze
+        working-directory: dart/ihs_godot_view
+      - run: flutter pub get && flutter analyze
+        working-directory: dart/ihs_godot_view/example
+
+  smoke:
+    name: end to end (libgodot + producer on Mesa lavapipe/llvmpipe)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: toyota-connected/ivi-homescreen
+          ref: v3.0
+          path: ivi-homescreen
+      - name: Host packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build scons libvulkan-dev \
+               mesa-vulkan-drivers libegl-mesa0 libegl-dev libgles-dev
+      - name: ihs_shared (standalone)
+        run: |
+          cmake -G Ninja -S ivi-homescreen/shared -B build/ihs_shared \
+                -DCMAKE_BUILD_TYPE=Release -DENABLE_DLT=OFF \
+                -DCMAKE_INSTALL_PREFIX=$PWD/ihs_prefix
+          cmake --build build/ihs_shared && cmake --install build/ihs_shared
+      - name: libgodot with the ihs module
+        run: |
+          cmake -G Ninja -S godot -B build/godot \
+                -DGODOT_PATH_OVERRIDES=ON -DGODOT_SDL=OFF
+          cmake --build build/godot
+      - name: Producer
+        run: |
+          cmake -G Ninja -S plugin -B build/plugin -DCMAKE_PREFIX_PATH=$PWD/ihs_prefix \
+                -DIHS_GODOT_VIEW_BUILD_TESTS=OFF
+          cmake --build build/plugin
+      - name: Smoke tests
+        run: |
+          cmake -G Ninja -S test -B build/test -DCMAKE_PREFIX_PATH=$PWD/ihs_prefix \
+                -DLIBGODOT=$PWD/build/godot/libgodot.so \
+                -DIHS_GODOT_VIEW=$PWD/build/plugin/libihs_godot_view.so
+          cmake --build build/test
+          ctest --test-dir build/test --output-on-failure

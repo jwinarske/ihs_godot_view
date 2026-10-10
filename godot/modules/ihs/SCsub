@@ -1,0 +1,24 @@
+#!/usr/bin/env python
+from misc.utility.scons_hints import *
+
+import os
+
+Import("env")
+Import("env_modules")
+
+env_ihs = env_modules.Clone()
+
+# The bridge header is shared with the producer plugin and lives at the root
+# of the ihs_godot_view repository: <repo>/include/ihs_godot/bridge.h. This
+# module sits at <repo>/godot/modules/ihs, so it is three levels up.
+module_dir = Dir(".").srcnode().abspath
+bridge_include = os.path.normpath(os.path.join(module_dir, "..", "..", "..", "include"))
+if not os.path.isfile(os.path.join(bridge_include, "ihs_godot", "bridge.h")):
+    print("ihs module: cannot find include/ihs_godot/bridge.h at " + bridge_include)
+    Exit(255)
+env_ihs.Prepend(CPPPATH=[bridge_include])
+
+if env["library_type"] == "executable":
+    print("ihs module: built into an executable; the bridge is only reachable from a libgodot build (library_type=shared_library).")
+
+env_ihs.add_source_files(env.modules_sources, "*.cpp")
