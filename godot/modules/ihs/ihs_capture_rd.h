@@ -32,10 +32,12 @@ class TextureStorage;
 // VK_IMAGE_LAYOUT_GENERAL through a driver callback, which is the layout a
 // consumer on another device or API can make sense of.
 //
-// No fence crosses the bridge: the display server runs RD without a surface,
-// which RD answers with a single frame in flight, so swap_buffers() returns
-// only after the GPU finished the frame. The capture is complete by the time
-// the iteration returns.
+// RD keeps the project's frame queue (two frames in flight by default) when
+// the device can export a semaphore as a sync_file: each capture's frame
+// signals frame_semaphore with its last submission, and end_iteration() hands
+// that out as the frame's acquire fence. Otherwise RD runs a single frame in
+// flight and a capture is complete when the iteration returns. CPU targets
+// read back synchronously with more than one frame in flight.
 class IhsCaptureRD : public IhsCaptureBackend {
 	struct Target {
 		uint32_t type = 0;
@@ -67,6 +69,12 @@ class IhsCaptureRD : public IhsCaptureBackend {
 	PFN_vkGetMemoryFdPropertiesKHR get_memory_fd_properties = nullptr;
 	PFN_vkGetImageDrmFormatModifierPropertiesEXT get_modifier_properties = nullptr;
 
+	VkSemaphore frame_semaphore = VK_NULL_HANDLE;
+	PFN_vkGetSemaphoreFdKHR get_semaphore_fd = nullptr;
+	bool explicit_sync = false;
+	bool fence_pending = false; // frame_semaphore is signaled by this iteration.
+	bool captured = false; // A capture landed in this iteration.
+
 	// CPU readback in flight: the callback fires inside the same iteration.
 	static IhsCaptureRD *singleton;
 	uint32_t pending_cpu_target = IHS_GODOT_NO_TARGET;
@@ -79,6 +87,7 @@ class IhsCaptureRD : public IhsCaptureBackend {
 	int32_t _memory_type(uint32_t p_bits, bool p_device_local) const;
 	void _release(Target &p_target, bool p_now);
 	uint64_t _frame() const;
+	uint32_t _frame_delay() const;
 
 public:
 	explicit IhsCaptureRD(IhsVulkanHooks *p_hooks);
@@ -91,6 +100,7 @@ public:
 	size_t query_dmabuf_formats(IhsGodotFormat *r_out, size_t p_max) override;
 	void fill_renderer_info(IhsGodotRendererInfo &r_info) override;
 	void collect_garbage() override;
+	int end_iteration() override;
 
 	// From the compositor, where the blit to screen would happen.
 	void capture(RendererRD::TextureStorage *p_texture_storage, const RenderingServerTypes::BlitToScreen *p_blits, int p_count);

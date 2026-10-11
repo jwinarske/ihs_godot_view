@@ -252,12 +252,12 @@ typedef struct IhsGodotRendererInfo {
  *   target_id         the target the frame was captured into, or
  *                     IHS_GODOT_NO_TARGET when nothing was captured (no
  *                     target set, hidden, or the frame was skipped).
- *   acquire_fence_fd  -1 when the frame is already complete on the GPU (the
- *                     Vulkan path always: a surfaceless RenderingDevice runs
- *                     with a single frame in flight and waits for it inside
- *                     the iteration), or a sync_file the caller owns that
- *                     signals when the capture finished (the GL path with
- *                     EGL_ANDROID_native_fence_sync).
+ *   acquire_fence_fd  -1 when the frame is already complete on the GPU, or a
+ *                     sync_file the caller owns that signals when the capture
+ *                     finished: Vulkan with two frames in flight (the device
+ *                     exports semaphores as sync_files), GL with
+ *                     EGL_ANDROID_native_fence_sync. CPU targets are always
+ *                     complete.
  *   width/height      the captured region inside the target; the viewport can
  *                     lag a resize by a frame.
  *   frame             Godot's frame counter.

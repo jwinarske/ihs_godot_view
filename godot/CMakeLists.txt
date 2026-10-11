@@ -99,6 +99,39 @@ if (NOT EXISTS "${_godot_src}/SConstruct")
     message(FATAL_ERROR "no Godot source at ${_godot_src}")
 endif ()
 
+# Engine changes the module needs (patches/*.patch, in order). The fetched
+# checkout is this project's: it is reset and patched on every configure, so
+# an edited patch replaces the old one. In a GODOT_SOURCE_DIR, a patch that
+# already applies in reverse is in place; one that applies neither way is an
+# error, since the module would not build.
+find_package(Git REQUIRED)
+file(GLOB _patches "${CMAKE_CURRENT_SOURCE_DIR}/patches/*.patch")
+list(SORT _patches)
+if (NOT GODOT_SOURCE_DIR)
+    execute_process(COMMAND "${GIT_EXECUTABLE}" checkout -q -- .
+            WORKING_DIRECTORY "${_godot_src}"
+            RESULT_VARIABLE _rc)
+    if (_rc)
+        message(FATAL_ERROR "could not reset ${_godot_src}")
+    endif ()
+endif ()
+foreach (_patch ${_patches})
+    get_filename_component(_name "${_patch}" NAME)
+    execute_process(COMMAND "${GIT_EXECUTABLE}" apply --reverse --check "${_patch}"
+            WORKING_DIRECTORY "${_godot_src}"
+            RESULT_VARIABLE _not_applied OUTPUT_QUIET ERROR_QUIET)
+    if (NOT _not_applied)
+        continue ()
+    endif ()
+    execute_process(COMMAND "${GIT_EXECUTABLE}" apply "${_patch}"
+            WORKING_DIRECTORY "${_godot_src}"
+            RESULT_VARIABLE _rc ERROR_VARIABLE _err)
+    if (_rc)
+        message(FATAL_ERROR "patch ${_name} does not apply to ${_godot_src}:\n${_err}")
+    endif ()
+    message(STATUS "Applied ${_name}")
+endforeach ()
+
 # --- toolchain -> SCons -----------------------------------------------------
 set(_proc "${CMAKE_SYSTEM_PROCESSOR}")
 if (NOT _proc)
@@ -211,6 +244,7 @@ set(_built "${_godot_src}/bin/libgodot.linuxbsd.${GODOT_TARGET}.${_arch}${_llvm}
 set(_out "${CMAKE_CURRENT_BINARY_DIR}/libgodot.so")
 file(GLOB_RECURSE _module_sources CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/modules/*"
+        "${CMAKE_CURRENT_SOURCE_DIR}/patches/*.patch"
         "${CMAKE_CURRENT_SOURCE_DIR}/../include/ihs_godot/*.h")
 
 string(REPLACE ";" " " _pretty "${_args}")
