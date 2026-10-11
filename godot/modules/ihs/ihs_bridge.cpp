@@ -127,10 +127,18 @@ int _iteration(void *p_instance, IhsGodotFrameInfo *r_out) {
 	GodotInstance *gi = _instance(p_instance);
 	const bool quit = gi->is_started() ? gi->iteration() : true;
 
+	const int fence = state.backend ? state.backend->end_iteration() : -1;
 	if (state.backend) {
 		state.backend->collect_garbage();
 	}
 	IhsState::Capture c = state.take_capture();
+	if (fence >= 0) {
+		if (c.target_id != IHS_GODOT_NO_TARGET && c.fence_fd < 0) {
+			c.fence_fd = fence;
+		} else {
+			close(fence);
+		}
+	}
 	if (r_out && r_out->struct_size >= sizeof(IhsGodotFrameInfo)) {
 		r_out->target_id = c.target_id;
 		r_out->acquire_fence_fd = c.fence_fd;

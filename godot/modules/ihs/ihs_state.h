@@ -33,6 +33,9 @@ public:
 	virtual void fill_renderer_info(IhsGodotRendererInfo &r_info) = 0;
 	// Release whatever removed targets left behind once the GPU is done.
 	virtual void collect_garbage() {}
+	// After each iteration: a sync_file the caller owns that signals when this
+	// iteration's capture is complete, or -1 when it already is.
+	virtual int end_iteration() { return -1; }
 };
 
 // Process-global module state shared by the bridge, the display server and

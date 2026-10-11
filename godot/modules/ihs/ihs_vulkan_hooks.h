@@ -51,6 +51,10 @@ public:
 
 	bool has_extension(const char *p_name) const;
 
+	// Whether the device Godot will pick can export a semaphore as a
+	// sync_file. Usable once the instance exists, before the device does.
+	bool can_export_sync_file();
+
 	VkInstance get_instance() const { return instance; }
 	VkPhysicalDevice get_physical_device_handle() const { return physical_device; }
 	VkDevice get_device() const { return device; }

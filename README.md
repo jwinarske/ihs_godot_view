@@ -53,9 +53,9 @@ running with the Forward+ / Mobile renderer on Vulkan.
   render anywhere but an OS window. The module adds:
   * the `ihs` display driver: no OS window, size and input from the host;
   * a renderer with no surface: `RenderingDevice` on Vulkan with no main
-    window (one frame in flight, so a frame is complete on the GPU when
-    `iteration()` returns), or Godot's compatibility renderer on a surfaceless
-    EGL context (desktop GL 3.3 or GLES 3.0);
+    window (two frames in flight, each handed over with a sync_file acquire
+    fence), or Godot's compatibility renderer on a surfaceless EGL context
+    (desktop GL 3.3 or GLES 3.0);
   * `VulkanHooks` that put Godot on the shell's GPU (device UUID, then DRM
     render node) and enable `VK_EXT_external_memory_dma_buf`,
     `VK_EXT_image_drm_format_modifier`, `VK_KHR_external_semaphore_fd`, ...;
@@ -268,6 +268,7 @@ environment, which is convenient on a target:
 | `IHS_GODOT_ARGS` | extra Godot arguments, space separated |
 | `IHS_GODOT_LIBRARY` | path to `libgodot.so` (default: beside the plugin, then the bundle's `lib/`) |
 | `IHS_GODOT_MAX_FPS` | cap the frame rate (default: the display's refresh) |
+| `IHS_GODOT_FRAMES_IN_FLIGHT` | `1`: Vulkan waits for each frame instead of handing over a fence |
 | `IHS_GODOT_VIEW_LIB` | Dart side: path to `libihs_godot_view.so` |
 | `IHS_GODOT_VIEW_LOG` | `error`, `warning`, `info` (default), `debug` |
 
@@ -309,10 +310,16 @@ cmake --build build/test && ctest --test-dir build/test --output-on-failure
   the same game. Two simultaneous views of the game are refused. When the
   game quits (`get_tree().quit()`) the app gets a `quit` event and Godot
   cannot be started again in that process.
-* **Vulkan runs one frame in flight.** A RenderingDevice without a window
-  uses a single frame, which is what makes the capture fence-free, at the
-  cost of CPU/GPU overlap. It also skips Godot's pipeline cache (a main-window
-  feature), so shaders compile at each launch.
+* **Engine patch.** Upstream, a RenderingDevice without a window runs a
+  single frame in flight and skips Godot's pipeline cache, so the CPU waits
+  for every GPU frame and shaders compile at each launch.
+  `godot/patches/0001-rendering-device-surfaceless-frame-queue.patch`
+  (applied by the CMake front) gives it the project's frame queue
+  (`rendering/rendering_device/vsync/frame_queue_size`) and the pipeline
+  cache, and lets the module add a semaphore to each frame's submission; the
+  module exports it as the frame's sync_file acquire fence. A device that
+  cannot export semaphores as sync_files keeps one frame in flight, as does
+  `IHS_GODOT_FRAMES_IN_FLIGHT=1`. CPU targets (shm) read back synchronously.
 * **Layouts and ownership.** Exported Vulkan images are left in
   `VK_IMAGE_LAYOUT_GENERAL` after each frame; queue-family ownership is not
   transferred to `VK_QUEUE_FAMILY_FOREIGN_EXT`, which current Mesa drivers do

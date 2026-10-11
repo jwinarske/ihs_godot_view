@@ -323,7 +323,8 @@ int main(int argc, char** argv) {
       captured++;
     }
     if (frame.acquire_fence_fd >= 0) {
-      // The GL path may fence the capture; wait for it before reading.
+      // Vulkan with frames in flight and GL with native fences hand over a
+      // fence for the capture; wait for it before reading.
       pollfd pfd{frame.acquire_fence_fd, POLLIN, 0};
       poll(&pfd, 1, 1000);
       close(frame.acquire_fence_fd);
