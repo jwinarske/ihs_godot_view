@@ -254,6 +254,32 @@ bool IhsVulkanHooks::has_extension(const char *p_name) const {
 	return false;
 }
 
+bool IhsVulkanHooks::can_export_sync_file() {
+	VkPhysicalDevice dev = VK_NULL_HANDLE;
+	if (instance == VK_NULL_HANDLE || !get_physical_device(&dev)) {
+		return false;
+	}
+	if (!_supports(_device_extensions(dev), VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME)) {
+		return false;
+	}
+	// 1.1 core; the KHR alias needs VK_KHR_external_semaphore_capabilities.
+	PFN_vkGetPhysicalDeviceExternalSemaphoreProperties get_props =
+			(PFN_vkGetPhysicalDeviceExternalSemaphoreProperties)vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceExternalSemaphoreProperties");
+	if (!get_props) {
+		get_props = (PFN_vkGetPhysicalDeviceExternalSemaphoreProperties)vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceExternalSemaphorePropertiesKHR");
+	}
+	if (!get_props) {
+		return false;
+	}
+	VkPhysicalDeviceExternalSemaphoreInfo info = {};
+	info.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_SEMAPHORE_INFO;
+	info.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
+	VkExternalSemaphoreProperties props = {};
+	props.sType = VK_STRUCTURE_TYPE_EXTERNAL_SEMAPHORE_PROPERTIES;
+	get_props(dev, &info, &props);
+	return (props.externalSemaphoreFeatures & VK_EXTERNAL_SEMAPHORE_FEATURE_EXPORTABLE_BIT) != 0;
+}
+
 bool IhsVulkanHooks::get_device_uuids(uint8_t r_device_uuid[16], uint8_t r_driver_uuid[16]) const {
 	if (physical_device == VK_NULL_HANDLE) {
 		return false;
