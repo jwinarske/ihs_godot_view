@@ -269,6 +269,7 @@ environment, which is convenient on a target:
 | `IHS_GODOT_LIBRARY` | path to `libgodot.so` (default: beside the plugin, then the bundle's `lib/`) |
 | `IHS_GODOT_MAX_FPS` | cap the frame rate (default: the display's refresh) |
 | `IHS_GODOT_FRAMES_IN_FLIGHT` | `1`: Vulkan waits for each frame instead of handing over a fence |
+| `IHS_GODOT_GPU_PRIORITY` | `default`: leave Godot's Vulkan queues at the driver's default priority instead of low |
 | `IHS_GODOT_VIEW_LIB` | Dart side: path to `libihs_godot_view.so` |
 | `IHS_GODOT_VIEW_LOG` | `error`, `warning`, `info` (default), `debug` |
 
@@ -320,6 +321,13 @@ cmake --build build/test && ctest --test-dir build/test --output-on-failure
   module exports it as the frame's sync_file acquire fence. A device that
   cannot export semaphores as sync_files keeps one frame in flight, as does
   `IHS_GODOT_FRAMES_IN_FLIGHT=1`. CPU targets (shm) read back synchronously.
+* **The game's GPU queue runs at low priority** (`VK_KHR_global_priority`
+  or `VK_EXT_global_priority`, when the device has one). With two frames in
+  flight the game's next frame is already on the GPU when the shell
+  composites the last one; on a GPU that runs contexts in submission order
+  (Adreno 640 here) every composite then waited a whole game frame and half
+  the frames never reached the screen. `IHS_GODOT_GPU_PRIORITY=default` keeps
+  the driver's default.
 * **Layouts and ownership.** Exported Vulkan images are left in
   `VK_IMAGE_LAYOUT_GENERAL` after each frame; queue-family ownership is not
   transferred to `VK_QUEUE_FAMILY_FOREIGN_EXT`, which current Mesa drivers do
