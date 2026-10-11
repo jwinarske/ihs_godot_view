@@ -70,8 +70,22 @@ IhsCaptureRD::IhsCaptureRD(IhsVulkanHooks *p_hooks) :
 		has_dmabuf = false;
 		has_modifiers = false;
 	}
-	IHS_LOG_INFO(vformat("RD capture: dma-buf %s, modifiers %s, opaque-fd %s",
-			has_dmabuf ? "yes" : "no", has_modifiers ? "yes" : "no", has_opaque ? "yes" : "no"));
+	if (device != VK_NULL_HANDLE && _frame_delay() > 1) {
+		get_semaphore_fd = (PFN_vkGetSemaphoreFdKHR)vkGetDeviceProcAddr(device, "vkGetSemaphoreFdKHR");
+		VkExportSemaphoreCreateInfo export_info = {};
+		export_info.sType = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO;
+		export_info.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
+		VkSemaphoreCreateInfo info = {};
+		info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+		info.pNext = &export_info;
+		explicit_sync = get_semaphore_fd && vkCreateSemaphore(device, &info, nullptr, &frame_semaphore) == VK_SUCCESS;
+		if (!explicit_sync) {
+			IHS_LOG_WARN("no exportable semaphore; waiting for every frame instead");
+		}
+	}
+	IHS_LOG_INFO(vformat("RD capture: dma-buf %s, modifiers %s, opaque-fd %s, %d frames in flight%s",
+			has_dmabuf ? "yes" : "no", has_modifiers ? "yes" : "no", has_opaque ? "yes" : "no",
+			_frame_delay(), explicit_sync ? " (sync_file)" : ""));
 }
 
 IhsCaptureRD::~IhsCaptureRD() {
@@ -87,6 +101,9 @@ IhsCaptureRD::~IhsCaptureRD() {
 		}
 	}
 	garbage.clear();
+	if (frame_semaphore != VK_NULL_HANDLE) {
+		vkDestroySemaphore(device, frame_semaphore, nullptr);
+	}
 	if (IhsRendererCompositorRD::capture_backend == this) {
 		IhsRendererCompositorRD::capture_backend = nullptr;
 	}
@@ -98,6 +115,11 @@ IhsCaptureRD::~IhsCaptureRD() {
 uint64_t IhsCaptureRD::_frame() const {
 	RenderingDevice *rd = RenderingDevice::get_singleton();
 	return rd ? rd->get_frames_drawn() : 0;
+}
+
+uint32_t IhsCaptureRD::_frame_delay() const {
+	RenderingDevice *rd = RenderingDevice::get_singleton();
+	return rd ? rd->get_frame_delay() : 1;
 }
 
 int32_t IhsCaptureRD::_memory_type(uint32_t p_bits, bool p_device_local) const {
@@ -416,7 +438,7 @@ void IhsCaptureRD::_release(Target &p_target, bool p_now) {
 		Garbage g;
 		g.image = p_target.image;
 		g.memory = p_target.memory;
-		g.frame = _frame() + 2;
+		g.frame = _frame() + _frame_delay() + 1;
 		garbage.push_back(g);
 	}
 	p_target.image = VK_NULL_HANDLE;
@@ -496,6 +518,35 @@ void IhsCaptureRD::collect_garbage() {
 			i++;
 		}
 	}
+}
+
+int IhsCaptureRD::end_iteration() {
+	const bool had_capture = captured;
+	captured = false;
+	if (fence_pending) {
+		// The frame was submitted at the end of the iteration, so the signal is
+		// pending; the export leaves the semaphore unsignaled for the next one.
+		fence_pending = false;
+		VkSemaphoreGetFdInfoKHR info = {};
+		info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR;
+		info.semaphore = frame_semaphore;
+		info.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
+		int fd = -1;
+		const VkResult err = get_semaphore_fd(device, &info, &fd);
+		if (err == VK_SUCCESS) {
+			return fd;
+		}
+		// The semaphore may still be signaled; it cannot be used again.
+		IHS_LOG_ERROR(vformat("vkGetSemaphoreFdKHR failed (VkResult %d); waiting for every frame instead", err));
+		explicit_sync = false;
+	}
+	if (had_capture && _frame_delay() > 1) {
+		// No fence to hand over: drain the queue so the capture is complete.
+		RD *rd = RD::get_singleton();
+		rd->submit();
+		rd->sync();
+	}
+	return -1;
 }
 
 size_t IhsCaptureRD::query_dmabuf_formats(IhsGodotFormat *r_out, size_t p_max) {
@@ -600,7 +651,7 @@ void IhsCaptureRD::fill_renderer_info(IhsGodotRendererInfo &r_info) {
 		r_info.target_types |= 1u << IHS_GODOT_TARGET_VK_OPAQUE_FD;
 	}
 	r_info.dmabuf_modifiers = has_modifiers ? 1 : 0;
-	r_info.explicit_sync = 0; // Frames are complete when iteration() returns.
+	r_info.explicit_sync = explicit_sync ? 1 : 0;
 	r_info.render_device = hooks->get_render_device();
 }
 
@@ -649,7 +700,12 @@ void IhsCaptureRD::capture(RendererRD::TextureStorage *p_texture_storage, const 
 
 	if (t->type == IHS_GODOT_TARGET_CPU) {
 		pending_cpu_target = state.next_target;
-		RD::get_singleton()->texture_get_data_async(t->texture, 0, callable_mp_static(&IhsCaptureRD::_cpu_data_ready));
+		if (_frame_delay() > 1) {
+			// The async callback would land frames later, after the slot moved on.
+			_cpu_data_ready(RD::get_singleton()->texture_get_data(t->texture, 0));
+		} else {
+			RD::get_singleton()->texture_get_data_async(t->texture, 0, callable_mp_static(&IhsCaptureRD::_cpu_data_ready));
+		}
 		return;
 	}
 
@@ -658,6 +714,11 @@ void IhsCaptureRD::capture(RendererRD::TextureStorage *p_texture_storage, const 
 	resource.type = RD::CALLBACK_RESOURCE_TYPE_TEXTURE;
 	resource.usage = RD::CALLBACK_RESOURCE_USAGE_GENERAL;
 	RD::get_singleton()->driver_callback_add(_noop_callback, nullptr, VectorView<RD::CallbackResource>(&resource, 1));
+	if (explicit_sync && !fence_pending) {
+		RD::get_singleton()->frame_signal_semaphore_add(RDD::SemaphoreID(frame_semaphore));
+		fence_pending = true;
+	}
+	captured = true;
 
 	state.capture.target_id = state.next_target;
 	state.capture.fence_fd = -1;

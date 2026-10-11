@@ -78,8 +78,20 @@ bool DisplayServerIhs::_init_vulkan() {
 		IHS_LOG_WARN("Vulkan context initialization failed");
 		return false;
 	}
-	// No window: RenderingDevice then runs without a surface, with a single
-	// frame in flight, which is what lets the capture skip fences.
+	// No window. RenderingDevice keeps the project's frame queue only when each
+	// frame's completion can be handed to the host as a sync_file; otherwise it
+	// runs a single frame in flight and a capture is complete when the
+	// iteration returns. IHS_GODOT_FRAMES_IN_FLIGHT=1 forces the latter.
+	const bool frame_queue = OS::get_singleton()->get_environment("IHS_GODOT_FRAMES_IN_FLIGHT") != "1" &&
+			vulkan_hooks->can_export_sync_file();
+	RenderingDevice::set_surfaceless_frame_queue(frame_queue);
+	RenderingDevice::set_surfaceless_pipeline_cache(true);
+	// The engine normally ends with the host process, without the shutdown
+	// that writes the pipeline cache, so write it in smaller steps as it grows.
+	const StringName chunk = "rendering/rendering_device/pipeline_cache/save_chunk_size_mb";
+	if (float(GLOBAL_GET(chunk)) > 0.25f) {
+		ProjectSettings::get_singleton()->set_setting(chunk, 0.25f);
+	}
 	rendering_device = memnew(RenderingDevice);
 	if (rendering_device->initialize(rendering_context, DisplayServerEnums::INVALID_WINDOW_ID) != OK) {
 		memdelete(rendering_device);

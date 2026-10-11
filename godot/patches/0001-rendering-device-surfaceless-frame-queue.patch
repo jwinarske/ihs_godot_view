@@ -1,0 +1,148 @@
+RenderingDevice: frame queue and pipeline cache without a window
+
+A RenderingDevice created without a main window runs a single frame in
+flight and skips the pipeline cache, so an embedder rendering offscreen
+gets no CPU/GPU overlap and recompiles pipelines at every launch.
+
+set_surfaceless_frame_queue(true) and set_surfaceless_pipeline_cache(true),
+called before initialize(), give the windowless singleton the project's
+frame queue and the pipeline cache.
+
+frame_signal_semaphore_add() adds a semaphore to the current frame's last
+submission, so the embedder can export the frame's completion (a sync_file)
+instead of waiting for it.
+
+Applied by godot/CMakeLists.txt on top of GODOT_GIT_REF.
+
+diff --git a/servers/rendering/rendering_device.cpp b/servers/rendering/rendering_device.cpp
+index e1a166b..ff9c8df 100644
+--- a/servers/rendering/rendering_device.cpp
++++ b/servers/rendering/rendering_device.cpp
+@@ -8268,6 +8268,22 @@ uint32_t RenderingDevice::get_frame_delay() const {
+ 	return frames.size();
+ }
+ 
++bool RenderingDevice::surfaceless_frame_queue = false;
++bool RenderingDevice::surfaceless_pipeline_cache = false;
++
++void RenderingDevice::set_surfaceless_frame_queue(bool p_enable) {
++	surfaceless_frame_queue = p_enable;
++}
++
++void RenderingDevice::set_surfaceless_pipeline_cache(bool p_enable) {
++	surfaceless_pipeline_cache = p_enable;
++}
++
++void RenderingDevice::frame_signal_semaphore_add(RDD::SemaphoreID p_semaphore) {
++	ERR_RENDER_THREAD_GUARD();
++	frames[frame].semaphores_to_signal.push_back(p_semaphore);
++}
++
+ uint64_t RenderingDevice::get_memory_usage(MemoryType p_type) const {
+ 	switch (p_type) {
+ 		case MEMORY_BUFFERS: {
+@@ -8396,6 +8412,7 @@ void RenderingDevice::execute_chained_cmds(bool p_present_swap_chain, RenderingD
+ 	// and chain them together via semaphores as dependent executions.
+ 	thread_local LocalVector<RDD::SemaphoreID> wait_semaphores;
+ 	wait_semaphores = frames[frame].semaphores_to_wait_on;
++	thread_local LocalVector<RDD::SemaphoreID> signal_semaphores;
+ 
+ 	for (uint32_t i = 0; i < command_buffer_count; i++) {
+ 		RDD::CommandBufferID command_buffer;
+@@ -8421,9 +8438,18 @@ void RenderingDevice::execute_chained_cmds(bool p_present_swap_chain, RenderingD
+ 			// Semaphores always need to be signaled if it's not the last command buffer.
+ 		}
+ 
++		signal_semaphores.clear();
++		if (signal_semaphore) {
++			signal_semaphores.push_back(signal_semaphore);
++		}
++		if (i == (command_buffer_count - 1)) {
++			for (const RDD::SemaphoreID &extra : frames[frame].semaphores_to_signal) {
++				signal_semaphores.push_back(extra);
++			}
++		}
++
+ 		driver->command_queue_execute_and_present(main_queue, wait_semaphores, command_buffer,
+-				signal_semaphore ? signal_semaphore : VectorView<RDD::SemaphoreID>(), signal_fence,
+-				swap_chains);
++				signal_semaphores, signal_fence, swap_chains);
+ 
+ 		// Make the next command buffer wait on the semaphore signaled by this one.
+ 		wait_semaphores.resize(1);
+@@ -8431,6 +8457,7 @@ void RenderingDevice::execute_chained_cmds(bool p_present_swap_chain, RenderingD
+ 	}
+ 
+ 	frames[frame].semaphores_to_wait_on.clear();
++	frames[frame].semaphores_to_signal.clear();
+ }
+ 
+ void RenderingDevice::_execute_frame(bool p_present) {
+@@ -8572,6 +8599,7 @@ Error RenderingDevice::initialize(RenderingContextDriver *p_context, DisplayServ
+ 	Error err;
+ 	RenderingContextDriver::SurfaceID main_surface = 0;
+ 	is_main_instance = (singleton == this) && (p_main_window != DisplayServerEnums::INVALID_WINDOW_ID);
++	is_surfaceless_main = (singleton == this) && (p_main_window == DisplayServerEnums::INVALID_WINDOW_ID);
+ 	if (p_main_window != DisplayServerEnums::INVALID_WINDOW_ID) {
+ 		// Retrieve the surface from the main window if it was specified.
+ 		main_surface = p_context->surface_get_from_window(p_main_window);
+@@ -8613,7 +8641,7 @@ Error RenderingDevice::initialize(RenderingContextDriver *p_context, DisplayServ
+ 	ERR_FAIL_COND_V_MSG((device_index < 0) || (device_index >= int32_t(device_count)), ERR_CANT_CREATE, "None of the devices supports both graphics and present queues.");
+ 
+ 	uint32_t frame_count = 1;
+-	if (main_surface != 0) {
++	if (main_surface != 0 || (is_surfaceless_main && surfaceless_frame_queue)) {
+ 		frame_count = MAX(2U, uint32_t(GLOBAL_GET("rendering/rendering_device/vsync/frame_queue_size")));
+ 	}
+ 
+@@ -8832,7 +8860,7 @@ Error RenderingDevice::initialize(RenderingContextDriver *p_context, DisplayServ
+ 	raytracing_list = RaytracingList();
+ 
+ 	bool project_pipeline_cache_enable = GLOBAL_GET("rendering/rendering_device/pipeline_cache/enable");
+-	if (is_main_instance && project_pipeline_cache_enable) {
++	if ((is_main_instance || (is_surfaceless_main && surfaceless_pipeline_cache)) && project_pipeline_cache_enable) {
+ 		// Only the instance that is not a local device and is also the singleton is allowed to manage a pipeline cache.
+ 		pipeline_cache_file_path = vformat("user://vulkan/pipelines.%s.%s",
+ 				OS::get_singleton()->get_current_rendering_method(),
+diff --git a/servers/rendering/rendering_device.h b/servers/rendering/rendering_device.h
+index f2b1085..6abdc83 100644
+--- a/servers/rendering/rendering_device.h
++++ b/servers/rendering/rendering_device.h
+@@ -88,6 +88,11 @@ private:
+ 
+ 	bool local_device_processing = false;
+ 	bool is_main_instance = false;
++	// What the singleton created without a main window keeps of a main
++	// window's setup; see set_surfaceless_frame_queue().
++	static bool surfaceless_frame_queue;
++	static bool surfaceless_pipeline_cache;
++	bool is_surfaceless_main = false;
+ 
+ protected:
+ 	static void _bind_methods();
+@@ -1836,6 +1841,7 @@ private:
+ 
+ 		// Semaphores the frame must wait on before executing the command buffer.
+ 		LocalVector<RDD::SemaphoreID> semaphores_to_wait_on;
++		LocalVector<RDD::SemaphoreID> semaphores_to_signal;
+ 
+ 		// Swap chains prepared for drawing during the frame that must be presented.
+ 		LocalVector<RDD::SwapChainID> swap_chains_to_present;
+@@ -1943,6 +1949,17 @@ public:
+ 
+ 	uint32_t get_frame_delay() const;
+ 
++	// Call before initialize(). The singleton RenderingDevice created without a
++	// main window then keeps rendering/rendering_device/vsync/frame_queue_size
++	// frames in flight, as one with a window does, instead of one. The embedder
++	// synchronizes with the GPU through frame_signal_semaphore_add().
++	static void set_surfaceless_frame_queue(bool p_enable);
++	// Call before initialize(). The singleton RenderingDevice created without a
++	// main window then keeps the pipeline cache, as one with a window does.
++	static void set_surfaceless_pipeline_cache(bool p_enable);
++	// Signals p_semaphore with the current frame's last submission.
++	void frame_signal_semaphore_add(RDD::SemaphoreID p_semaphore);
++
+ 	void submit();
+ 	void sync();
+ 
