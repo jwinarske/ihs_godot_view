@@ -10,6 +10,7 @@
 
 #include "ihs_state.h"
 
+#include "core/os/os.h"
 #include "core/string/print_string.h"
 #include "core/variant/variant.h"
 
@@ -219,12 +220,47 @@ bool IhsVulkanHooks::create_vulkan_device(const VkDeviceCreateInfo *p_device_cre
 	for (const CharString &extra : IhsState::get().extra_device_extensions) {
 		add(extra.get_data());
 	}
+	// The game's queues go below the compositor's. With frames in flight the
+	// next frame is on the GPU before the shell composites the last one, and a
+	// GPU that runs contexts in submission order would make every composite
+	// wait a whole game frame. IHS_GODOT_GPU_PRIORITY=default keeps the
+	// driver's default.
+	bool low_priority = false;
+	if (OS::get_singleton()->get_environment("IHS_GODOT_GPU_PRIORITY") != "default") {
+		add(VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME);
+		if (!enabled(VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME)) {
+			add(VK_EXT_GLOBAL_PRIORITY_EXTENSION_NAME);
+		}
+		low_priority = enabled(VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME) || enabled(VK_EXT_GLOBAL_PRIORITY_EXTENSION_NAME);
+	}
 
 	VkDeviceCreateInfo create_info = *p_device_create_info;
 	create_info.enabledExtensionCount = names.size();
 	create_info.ppEnabledExtensionNames = names.ptr();
 
-	const VkResult err = vkCreateDevice(physical_device, &create_info, nullptr, r_device);
+	LocalVector<VkDeviceQueueCreateInfo> queues;
+	LocalVector<VkDeviceQueueGlobalPriorityCreateInfoKHR> priorities;
+	if (low_priority) {
+		queues.resize(create_info.queueCreateInfoCount);
+		priorities.resize(create_info.queueCreateInfoCount);
+		for (uint32_t i = 0; i < queues.size(); i++) {
+			queues[i] = create_info.pQueueCreateInfos[i];
+			priorities[i] = {};
+			priorities[i].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_GLOBAL_PRIORITY_CREATE_INFO_KHR;
+			priorities[i].pNext = queues[i].pNext;
+			priorities[i].globalPriority = VK_QUEUE_GLOBAL_PRIORITY_LOW_KHR;
+			queues[i].pNext = &priorities[i];
+		}
+		create_info.pQueueCreateInfos = queues.ptr();
+	}
+
+	VkResult err = vkCreateDevice(physical_device, &create_info, nullptr, r_device);
+	if (err != VK_SUCCESS && low_priority) {
+		IHS_LOG_WARN(vformat("vkCreateDevice with a low-priority queue failed (VkResult %d); using the default priority", err));
+		create_info.pQueueCreateInfos = p_device_create_info->pQueueCreateInfos;
+		err = vkCreateDevice(physical_device, &create_info, nullptr, r_device);
+		low_priority = false;
+	}
 	if (err != VK_SUCCESS) {
 		IHS_LOG_ERROR(vformat("vkCreateDevice failed (VkResult %d)", err));
 		return false;
@@ -238,6 +274,9 @@ bool IhsVulkanHooks::create_vulkan_device(const VkDeviceCreateInfo *p_device_cre
 		list += String(" ") + n;
 	}
 	IHS_LOG_DEBUG("Vulkan device extensions:" + list);
+	if (low_priority) {
+		IHS_LOG_INFO("Vulkan queues at low global priority");
+	}
 	return true;
 }
 
