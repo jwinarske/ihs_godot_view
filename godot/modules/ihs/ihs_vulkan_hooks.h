@@ -39,6 +39,7 @@ class IhsVulkanHooks : public VulkanHooks {
 	LocalVector<String> enabled_extensions;
 
 	VkPhysicalDevice _pick_physical_device() const;
+	void _hint_v3dv(VkPhysicalDevice p_device) const;
 
 public:
 	bool create_vulkan_instance(const VkInstanceCreateInfo *p_vulkan_create_info, VkInstance *r_instance) override;

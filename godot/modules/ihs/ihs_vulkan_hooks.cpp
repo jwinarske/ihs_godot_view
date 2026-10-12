@@ -160,6 +160,30 @@ VkPhysicalDevice IhsVulkanHooks::_pick_physical_device() const {
 	return by_type;
 }
 
+// Mesa V3DV tries every 2-thread register-allocation strategy on a shader
+// that spills, looking for the fewest spills; on the Mobile renderer's
+// per-pixel-lit shaders that multiplies a first launch several times over.
+// V3D_DEBUG is read once, when the process creates its first Vulkan
+// instance, so this can only point at it.
+void IhsVulkanHooks::_hint_v3dv(VkPhysicalDevice p_device) const {
+	PFN_vkGetPhysicalDeviceProperties2 props2 = _props2();
+	if (!props2 || api_version < VK_API_VERSION_1_2) {
+		return;
+	}
+	VkPhysicalDeviceDriverProperties driver = {};
+	driver.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES;
+	VkPhysicalDeviceProperties2 props = {};
+	props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+	props.pNext = &driver;
+	props2(p_device, &props);
+	if (driver.driverID != VK_DRIVER_ID_MESA_V3DV) {
+		return;
+	}
+	if (!OS::get_singleton()->get_environment("V3D_DEBUG").contains("opt_compile_time")) {
+		IHS_LOG_INFO("Mesa V3DV: start the shell with V3D_DEBUG=opt_compile_time to cut first-launch shader compiles (see the README)");
+	}
+}
+
 bool IhsVulkanHooks::get_physical_device(VkPhysicalDevice *r_device) {
 	if (physical_device == VK_NULL_HANDLE) {
 		physical_device = _pick_physical_device();
@@ -172,6 +196,7 @@ bool IhsVulkanHooks::get_physical_device(VkPhysicalDevice *r_device) {
 	vkGetPhysicalDeviceProperties(physical_device, &props);
 	// What can actually be used on the device is the lower of the two.
 	api_version = MIN(api_version, props.apiVersion);
+	_hint_v3dv(physical_device);
 	*r_device = physical_device;
 	return true;
 }
