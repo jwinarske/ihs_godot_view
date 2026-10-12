@@ -14,12 +14,13 @@
 # (rendering/renderer/rendering_method="mobile") or run with
 # IHS_GODOT_RENDERING_METHOD=mobile.
 #
-# Start the homescreen with V3D_DEBUG=opt_compile_time in its environment:
-# Mesa V3DV otherwise compiles each large fragment shader with every 2-thread
-# strategy, and the first launch of a per-pixel-lit scene takes minutes per
-# pipeline. ../../../../patches/mesa/ has a liveness patch for the board's
-# Mesa that speeds up every compile further. See the README (Boards; Limits
-# and notes).
+# With Mesa 25.x, start the homescreen with V3D_DEBUG=opt_compile_time in its
+# environment: Mesa V3DV otherwise compiles each large fragment shader with
+# every 2-thread strategy, and the first launch of a per-pixel-lit scene takes
+# minutes per pipeline. ../../../../patches/mesa/ has a liveness patch for
+# Mesa 25 that speeds up every compile further. Mesa 26 removed the option and
+# the patch does not apply; use force_vertex_shading. See the README (Boards;
+# Limits and notes).
 
 cross:
   targets:

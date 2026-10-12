@@ -209,24 +209,26 @@ tps-demo main menu, release builds, ETC2/ASTC pack:
 
 | GPU (driver) | Backend | Renderer | Surfaces granted | FPS |
 | --- | --- | --- | --- | --- |
-| Adreno 640 (Qualcomm) | drm-kms-vulkan | Mobile | dmabuf, vk_image, shm | 45 (shm 5, synchronous readback) |
+| Adreno 640 (Qualcomm) | drm-kms-vulkan | Mobile | dmabuf, vk_image, shm | 60 (vsync; shm 43–46) |
 | Adreno 640 (Qualcomm) | drm-kms-egl | Mobile | dmabuf, plane, egl_image | 45 |
 | V3D 7.1, Pi 5 (Mesa V3DV) | drm-kms-vulkan | Mobile, vertex shading | dmabuf, vk_image, shm | 27 at 1280×1440 |
 | V3D 7.1, Pi 5 (Mesa V3D) | drm-kms-vulkan | GL compatibility | dmabuf | 12 at 1280×1440 |
 | GC7000UL, i.MX 8M Plus (Vivante) | drm-kms-egl | Mobile | dmabuf | 4, 3D missing |
 | GC7000UL, i.MX 8M Plus (Vivante) | drm-kms-egl | GL compatibility | dmabuf | 1 at 1920×1080 |
 
-On the Pi 5, start the shell with `V3D_DEBUG=opt_compile_time` in its
-environment (the shell's command line, or `Environment=` in its systemd
-unit). Mesa reads it once, when the process creates its first Vulkan
-instance, so the plugin cannot set it later; the module logs a hint when it
-finds V3DV without it. Without it the Mobile renderer's per-pixel-lit
-pipelines take longer to compile than anyone will wait (see "Limits and
-notes"). With it, and better still with Mesa rebuilt with
+On the Pi 5 with Mesa 25.x, start the shell with
+`V3D_DEBUG=opt_compile_time` in its environment (the shell's command line,
+or `Environment=` in its systemd unit). Mesa reads it once, when the process
+creates its first Vulkan instance, so the plugin cannot set it later; the
+module logs a hint when it finds Mesa 25 V3DV without it. Without it the
+Mobile renderer's per-pixel-lit pipelines take longer to compile than anyone
+will wait (see "Limits and notes"). With it, and better still with Mesa
+rebuilt with
 [`patches/mesa/0001-broadcom-compiler-faster-liveness.patch`](patches/mesa/0001-broadcom-compiler-faster-liveness.patch),
-per-pixel lighting compiles. Per-vertex lighting is still the cheaper option
-on the GPU, and it is what the FPS above was measured with; put an
-`override.cfg` next to the `.pck`:
+per-pixel lighting compiles. Mesa 26 removed the option, and the patch does
+not apply there; see "Limits and notes". Per-vertex lighting is the cheaper
+option on the GPU either way, and it is what the FPS above was measured
+with; put an `override.cfg` next to the `.pck`:
 
 ```ini
 [rendering]
@@ -385,6 +387,14 @@ cmake --build build/test && ctest --test-dir build/test --output-on-failure
   applies to Mesa 25.0 and 25.2) makes the liveness pass cheaper and leaves
   the generated code bit-for-bit the same. A Pi 5 core is slower than the
   x86 one these were taken on, so expect longer times on the board.
+
+  Mesa 26 (Raspberry Pi OS trixie backports ship 26.2.2) picks strategies
+  from a register-pressure probe and caps the spill budget at the best
+  result so far, and removed `opt_compile_time`. The liveness rebuild after
+  each spill is unchanged: on a Pi 5 with 26.2.2 no per-pixel pipeline
+  returned in 10 minutes. The patch does not apply to 26.x, whose
+  `vir_live_variables.c` gained partial-write tracking; use
+  `force_vertex_shading` there.
 * **Vivante GC7000UL (i.MX 8M Plus), Vulkan.** The driver rejects scene
   pipelines at vertex/fragment link time with
   `VK_ERROR_INVALID_SHADER_NV`, for two reasons:
