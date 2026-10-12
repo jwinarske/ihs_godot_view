@@ -240,7 +240,18 @@ set(_llvm "")
 if (CMAKE_CXX_COMPILER MATCHES "clang[^/]*$")
     set(_llvm ".llvm")
 endif ()
-set(_built "${_godot_src}/bin/libgodot.linuxbsd.${GODOT_TARGET}.${_arch}${_llvm}.so")
+# Then any extra_suffix from GODOT_SCONS_ARGS, then .san for a sanitizer build
+# (platform/linuxbsd/detect.py).
+set(_extra "")
+set(_san "")
+foreach (_arg ${GODOT_SCONS_ARGS})
+    if (_arg MATCHES "^extra_suffix=(.+)$")
+        set(_extra ".${CMAKE_MATCH_1}")
+    elseif (_arg MATCHES "^use_(asan|ubsan|lsan|tsan|msan)=(yes|true|1)$")
+        set(_san ".san")
+    endif ()
+endforeach ()
+set(_built "${_godot_src}/bin/libgodot.linuxbsd.${GODOT_TARGET}.${_arch}${_llvm}${_extra}${_san}.so")
 set(_out "${CMAKE_CURRENT_BINARY_DIR}/libgodot.so")
 file(GLOB_RECURSE _module_sources CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/modules/*"
