@@ -384,7 +384,7 @@ cmake --build build/test && ctest --test-dir build/test --output-on-failure
   n/m: not measured. `opt_compile_time` keeps the first 2-thread strategy
   that allocates. The patch
   ([`patches/mesa/`](patches/mesa/0001-broadcom-compiler-faster-liveness.patch),
-  applies to Mesa 25.0 and 25.2) makes the liveness pass cheaper and leaves
+  Mesa 25.x only: 25.0 and 25.2) makes the liveness pass cheaper and leaves
   the generated code bit-for-bit the same. A Pi 5 core is slower than the
   x86 one these were taken on, so expect longer times on the board.
 
@@ -392,9 +392,12 @@ cmake --build build/test && ctest --test-dir build/test --output-on-failure
   from a register-pressure probe and caps the spill budget at the best
   result so far, and removed `opt_compile_time`. The liveness rebuild after
   each spill is unchanged: on a Pi 5 with 26.2.2 no per-pixel pipeline
-  returned in 10 minutes. The patch does not apply to 26.x, whose
-  `vir_live_variables.c` gained partial-write tracking; use
-  `force_vertex_shading` there.
+  returned in 10 minutes. The patch is for Mesa 25.x only; it does not
+  apply to 26.x. Mesa main fixes the cost upstream instead: spills in
+  batches, liveness rebuilt once per batch and then updated incrementally
+  (`ac24bd75`…`7bd40e5b`, MR 44177; upstream measured a PBR uber shader at
+  323–410 s → 97–102 s on a Pi 5). Until a release carries it, use
+  `force_vertex_shading` on Mesa 26.
 * **Vivante GC7000UL (i.MX 8M Plus), Vulkan.** The driver rejects scene
   pipelines at vertex/fragment link time with
   `VK_ERROR_INVALID_SHADER_NV`, for two reasons:

@@ -25,7 +25,12 @@ x86-64, Mesa 25.2.8 debugoptimized, shader cache off:
   this patch                             58-64 s
   this patch + V3D_DEBUG=opt_compile_time 13 s
 
-Applies to Mesa 25.x (src/broadcom/compiler/vir_live_variables.c).
+Applies to Mesa 25.x only (src/broadcom/compiler/vir_live_variables.c).
+It does not apply to 26.x, and is not meant for it: Mesa main replaced the
+rebuild-after-every-spill loop with batched spills and incremental
+liveness (ac24bd75, f86312ee, c4cb1b20, af333031, 7bd40e5b; MR 44177),
+which upstream measured at 323-410 s -> 97-102 s on a Pi 5 for a PBR
+uber shader. Use that series, or the release that carries it, on 26.x.
 
 --- a/src/broadcom/compiler/vir_live_variables.c
 +++ b/src/broadcom/compiler/vir_live_variables.c
