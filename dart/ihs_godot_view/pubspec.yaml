@@ -20,3 +20,13 @@ dev_dependencies:
   flutter_lints: ^4.0.0
   flutter_test:
     sdk: flutter
+
+flutter:
+  # VirtualGamepad's labels. Embedded targets often ship no system fonts
+  # (the SA8155P image has none), and Text then draws nothing; bundling the
+  # one face the labels use makes them render everywhere.
+  fonts:
+    - family: IhsGodotViewLabel
+      fonts:
+        - asset: fonts/Roboto-Bold.ttf
+          weight: 700
