@@ -21,7 +21,10 @@
 // target. Godot renders render targets "upside down" (row 0 on top) so that
 // the blit to a window can flip them, which means a straight blit writes the
 // target top row first -- the order a dma-buf consumer expects -- and no
-// flip flag is needed. A CPU target is a glReadPixels.
+// flip flag is needed. A CPU target is read back through a pair of pixel
+// pack buffers: each frame starts its own read and copies out the previous
+// one, which has finished on the GPU by then, so the CPU never waits on the
+// frame it just drew. A CPU target therefore shows the frame before.
 //
 // When EGL_ANDROID_native_fence_sync is there, the capture is fenced with a
 // sync_file the producer passes on as the acquire fence; otherwise it is
@@ -39,10 +42,23 @@ class IhsCaptureGLES3 : public IhsCaptureBackend {
 		uint32_t cpu_stride = 0;
 	};
 
+	// One CPU readback: a pixel pack buffer and the fence after its read.
+	struct Readback {
+		GLuint buffer = 0;
+		size_t size = 0;
+		GLsync fence = nullptr;
+		uint32_t width = 0;
+		uint32_t height = 0;
+	};
+
 	IhsEgl *egl = nullptr;
 	HashMap<uint32_t, Target> targets;
+	Readback readbacks[2];
+	uint32_t readback_next = 0;
 
 	void _release(Target &p_target);
+	void _drop_readbacks();
+	void _capture_cpu(GLuint p_fbo, const Size2i &p_size, uint32_t p_id, const Target &p_target);
 	int _import_dmabuf(const IhsGodotTarget &p_target, Target &r_target);
 	int _fence();
 

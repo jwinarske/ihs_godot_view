@@ -490,9 +490,6 @@ void IhsCaptureRD::remove_target(uint32_t p_id) {
 	}
 	_release(it->value, false);
 	targets.remove(it);
-	if (pending_cpu_target == p_id) {
-		pending_cpu_target = IHS_GODOT_NO_TARGET;
-	}
 }
 
 void IhsCaptureRD::remove_all_targets() {
@@ -500,7 +497,6 @@ void IhsCaptureRD::remove_all_targets() {
 		_release(kv.value, false);
 	}
 	targets.clear();
-	pending_cpu_target = IHS_GODOT_NO_TARGET;
 }
 
 void IhsCaptureRD::collect_garbage() {
@@ -655,28 +651,32 @@ void IhsCaptureRD::fill_renderer_info(IhsGodotRendererInfo &r_info) {
 	r_info.render_device = hooks->get_render_device();
 }
 
-void IhsCaptureRD::_cpu_data_ready(const Vector<uint8_t> &p_data) {
+void IhsCaptureRD::_cpu_data_ready(const Vector<uint8_t> &p_data, uint32_t p_width, uint32_t p_height) {
 	IhsCaptureRD *self = singleton;
-	if (!self || self->pending_cpu_target == IHS_GODOT_NO_TARGET) {
+	IhsState &state = IhsState::get();
+	// Outside an iteration (a teardown sync) no buffer is the producer's to
+	// write; that frame is dropped.
+	if (!self || !state.iterating || state.next_target == IHS_GODOT_NO_TARGET) {
 		return;
 	}
-	const uint32_t id = self->pending_cpu_target;
-	self->pending_cpu_target = IHS_GODOT_NO_TARGET;
+	const uint32_t id = state.next_target;
 	const Target *t = self->targets.getptr(id);
-	if (!t || !t->pixels) {
+	if (!t || t->type != IHS_GODOT_TARGET_CPU || !t->pixels) {
 		return;
 	}
-	const size_t row = size_t(t->width) * 4;
-	const size_t rows = MIN(size_t(t->height), row ? size_t(p_data.size()) / row : 0);
+	// The frame was read back at its own size; a resize since then crops it.
+	const size_t src_row = size_t(p_width) * 4;
+	const size_t row = size_t(MIN(p_width, t->width)) * 4;
+	const size_t rows = MIN(size_t(MIN(p_height, t->height)), src_row ? size_t(p_data.size()) / src_row : 0);
 	const uint8_t *src = p_data.ptr();
 	uint8_t *dst = static_cast<uint8_t *>(t->pixels);
 	for (size_t y = 0; y < rows; y++) {
-		memcpy(dst + y * t->cpu_stride, src + y * row, row);
+		memcpy(dst + y * t->cpu_stride, src + y * src_row, row);
 	}
-	IhsState::Capture &c = IhsState::get().capture;
+	IhsState::Capture &c = state.capture;
 	c.target_id = id;
 	c.fence_fd = -1;
-	c.width = t->width;
+	c.width = uint32_t(row / 4);
 	c.height = uint32_t(rows);
 }
 
@@ -699,13 +699,12 @@ void IhsCaptureRD::capture(RendererRD::TextureStorage *p_texture_storage, const 
 	RendererRD::CopyEffects::get_singleton()->copy_to_fb_rect(source, t->framebuffer, Rect2i(0, 0, t->width, t->height), false, false, false, to_srgb);
 
 	if (t->type == IHS_GODOT_TARGET_CPU) {
-		pending_cpu_target = state.next_target;
-		if (_frame_delay() > 1) {
-			// The async callback would land frames later, after the slot moved on.
-			_cpu_data_ready(RD::get_singleton()->texture_get_data(t->texture, 0));
-		} else {
-			RD::get_singleton()->texture_get_data_async(t->texture, 0, callable_mp_static(&IhsCaptureRD::_cpu_data_ready));
-		}
+		// texture_get_data() would flush and wait for every frame in flight.
+		// The async copy lands frame_delay - 1 iterations later, in whichever
+		// CPU target that iteration draws into: one frame more latency, no
+		// stall.
+		RD::get_singleton()->texture_get_data_async(t->texture, 0,
+				callable_mp_static(&IhsCaptureRD::_cpu_data_ready).bind(t->width, t->height));
 		return;
 	}
 
