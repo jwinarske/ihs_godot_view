@@ -18,9 +18,10 @@
 # environment: Mesa V3DV otherwise compiles each large fragment shader with
 # every 2-thread strategy, and the first launch of a per-pixel-lit scene takes
 # minutes per pipeline. ../../../../patches/mesa/ has a liveness patch for
-# Mesa 25 that speeds up every compile further. Mesa 26 removed the option and
-# the patch does not apply; use force_vertex_shading. See the README (Boards;
-# Limits and notes).
+# Mesa 25 that speeds up every compile further (Mesa 25.x only). Mesa 26
+# removed the option and the patch does not apply; Mesa main fixes the cost
+# upstream (MR 44177). Until a release carries it, use force_vertex_shading.
+# See the README (Boards; Limits and notes).
 
 cross:
   targets:
