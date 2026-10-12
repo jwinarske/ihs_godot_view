@@ -209,7 +209,7 @@ tps-demo main menu, release builds, ETC2/ASTC pack:
 
 | GPU (driver) | Backend | Renderer | Surfaces granted | FPS |
 | --- | --- | --- | --- | --- |
-| Adreno 640 (Qualcomm) | drm-kms-vulkan | Mobile | dmabuf, vk_image, shm | 45 (shm 5) |
+| Adreno 640 (Qualcomm) | drm-kms-vulkan | Mobile | dmabuf, vk_image, shm | 45 (shm 5, synchronous readback) |
 | Adreno 640 (Qualcomm) | drm-kms-egl | Mobile | dmabuf, plane, egl_image | 45 |
 | V3D 7.1, Pi 5 (Mesa V3DV) | drm-kms-vulkan | Mobile, vertex shading | dmabuf, vk_image, shm | 27 at 1280×1440 |
 | V3D 7.1, Pi 5 (Mesa V3D) | drm-kms-vulkan | GL compatibility | dmabuf | 12 at 1280×1440 |
@@ -328,7 +328,15 @@ cmake --build build/test && ctest --test-dir build/test --output-on-failure
   cache, and lets the module add a semaphore to each frame's submission; the
   module exports it as the frame's sync_file acquire fence. A device that
   cannot export semaphores as sync_files keeps one frame in flight, as does
-  `IHS_GODOT_FRAMES_IN_FLIGHT=1`. CPU targets (shm) read back synchronously.
+  `IHS_GODOT_FRAMES_IN_FLIGHT=1`.
+* **CPU targets (shm) show the previous frame.** The readback is
+  asynchronous: Vulkan copies into RenderingDevice's download staging and
+  the pixels arrive when that frame retires, GL reads into one of two pixel
+  pack buffers behind a fence. Either way the pixels go into the CPU target
+  of the iteration they land in, so the CPU never waits for the frame it
+  just drew, at one frame of extra latency (none on Vulkan with one frame
+  in flight). The first frame then reports nothing captured, and the frame
+  after a resize is the old size, cropped.
 * **The game's GPU queue runs at low priority** (`VK_KHR_global_priority`
   or `VK_EXT_global_priority`, when the device has one). With two frames in
   flight the game's next frame is already on the GPU when the shell

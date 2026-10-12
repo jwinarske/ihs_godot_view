@@ -75,10 +75,12 @@ class IhsCaptureRD : public IhsCaptureBackend {
 	bool fence_pending = false; // frame_semaphore is signaled by this iteration.
 	bool captured = false; // A capture landed in this iteration.
 
-	// CPU readback in flight: the callback fires inside the same iteration.
+	// CPU readback: RD calls back once the frame that recorded the copy has
+	// retired, frame_delay - 1 iterations later, from that iteration's
+	// swap_buffers. The pixels go to the CPU target of the iteration they land
+	// in.
 	static IhsCaptureRD *singleton;
-	uint32_t pending_cpu_target = IHS_GODOT_NO_TARGET;
-	static void _cpu_data_ready(const Vector<uint8_t> &p_data);
+	static void _cpu_data_ready(const Vector<uint8_t> &p_data, uint32_t p_width, uint32_t p_height);
 
 	int _import_dmabuf(const IhsGodotTarget &p_target, Target &r_target);
 	int _import_opaque(const IhsGodotTarget &p_target, Target &r_target);

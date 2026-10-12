@@ -24,6 +24,7 @@ IhsCaptureGLES3::IhsCaptureGLES3(IhsEgl *p_egl) :
 
 IhsCaptureGLES3::~IhsCaptureGLES3() {
 	remove_all_targets();
+	_drop_readbacks();
 	if (IhsRasterizerGLES3::capture_backend == this) {
 		IhsRasterizerGLES3::capture_backend = nullptr;
 	}
@@ -47,6 +48,18 @@ void IhsCaptureGLES3::_release(Target &p_target) {
 	if (p_target.image) {
 		egl->destroy_image(egl->display, p_target.image);
 		p_target.image = nullptr;
+	}
+}
+
+void IhsCaptureGLES3::_drop_readbacks() {
+	for (Readback &r : readbacks) {
+		if (r.fence) {
+			glDeleteSync(r.fence);
+		}
+		if (r.buffer) {
+			glDeleteBuffers(1, &r.buffer);
+		}
+		r = Readback();
 	}
 }
 
@@ -252,30 +265,7 @@ void IhsCaptureGLES3::capture(const RenderingServerTypes::BlitToScreen *p_blits,
 	const Size2i src = rt->size;
 
 	if (t->type == IHS_GODOT_TARGET_CPU) {
-		const uint32_t w = MIN(uint32_t(src.width), t->width);
-		const uint32_t h = MIN(uint32_t(src.height), t->height);
-		glBindFramebuffer(GL_READ_FRAMEBUFFER, rt->fbo);
-		glPixelStorei(GL_PACK_ALIGNMENT, 4);
-		glPixelStorei(GL_PACK_ROW_LENGTH, GLint(t->cpu_stride / 4));
-		glReadPixels(0, 0, GLsizei(w), GLsizei(h), GL_RGBA, GL_UNSIGNED_BYTE, t->pixels);
-		glPixelStorei(GL_PACK_ROW_LENGTH, 0);
-		glBindFramebuffer(GL_READ_FRAMEBUFFER, GLES3::TextureStorage::system_fbo);
-		if (!ihs_fourcc_is_rgba(t->fourcc)) {
-			// B,G,R,A target: swap in place.
-			for (uint32_t y = 0; y < h; y++) {
-				uint8_t *row = static_cast<uint8_t *>(t->pixels) + size_t(y) * t->cpu_stride;
-				for (uint32_t x = 0; x < w; x++) {
-					uint8_t *p = row + x * 4;
-					const uint8_t r = p[0];
-					p[0] = p[2];
-					p[2] = r;
-				}
-			}
-		}
-		state.capture.target_id = state.next_target;
-		state.capture.fence_fd = -1; // glReadPixels is synchronous.
-		state.capture.width = w;
-		state.capture.height = h;
+		_capture_cpu(rt->fbo, src, state.next_target, *t);
 		return;
 	}
 
@@ -292,6 +282,86 @@ void IhsCaptureGLES3::capture(const RenderingServerTypes::BlitToScreen *p_blits,
 	state.capture.fence_fd = _fence();
 	state.capture.width = t->width;
 	state.capture.height = t->height;
+}
+
+void IhsCaptureGLES3::_capture_cpu(GLuint p_fbo, const Size2i &p_size, uint32_t p_id, const Target &p_target) {
+	// Start this frame's read into a pack buffer; it completes on the GPU.
+	Readback &cur = readbacks[readback_next];
+	Readback &prev = readbacks[readback_next ^ 1];
+	readback_next ^= 1;
+
+	const uint32_t w = MIN(uint32_t(p_size.width), p_target.width);
+	const uint32_t h = MIN(uint32_t(p_size.height), p_target.height);
+	const size_t size = size_t(w) * h * 4;
+	if (cur.fence) {
+		glDeleteSync(cur.fence); // Never collected (a frame without a CPU target).
+		cur.fence = nullptr;
+	}
+	if (!cur.buffer) {
+		glGenBuffers(1, &cur.buffer);
+	}
+	glBindBuffer(GL_PIXEL_PACK_BUFFER, cur.buffer);
+	if (cur.size < size) {
+		glBufferData(GL_PIXEL_PACK_BUFFER, GLsizeiptr(size), nullptr, GL_STREAM_READ);
+		cur.size = size;
+	}
+	glBindFramebuffer(GL_READ_FRAMEBUFFER, p_fbo);
+	glPixelStorei(GL_PACK_ALIGNMENT, 4);
+	glReadPixels(0, 0, GLsizei(w), GLsizei(h), GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+	glBindFramebuffer(GL_READ_FRAMEBUFFER, GLES3::TextureStorage::system_fbo);
+	cur.fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+	cur.width = w;
+	cur.height = h;
+	// Submit it now, so it runs while the CPU copies out the previous one.
+	glFlush();
+
+	// Copy out the previous frame's read: a frame old, so normally done.
+	if (!prev.fence) {
+		glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+		return;
+	}
+	const GLenum waited = glClientWaitSync(prev.fence, GL_SYNC_FLUSH_COMMANDS_BIT, GLuint64(1000000000));
+	glDeleteSync(prev.fence);
+	prev.fence = nullptr;
+	if (waited == GL_TIMEOUT_EXPIRED || waited == GL_WAIT_FAILED) {
+		glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+		return;
+	}
+	// A resize since then crops it.
+	const uint32_t cw = MIN(prev.width, p_target.width);
+	const uint32_t ch = MIN(prev.height, p_target.height);
+	glBindBuffer(GL_PIXEL_PACK_BUFFER, prev.buffer);
+	const uint8_t *src = static_cast<const uint8_t *>(
+			glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, GLsizeiptr(size_t(prev.width) * prev.height * 4), GL_MAP_READ_BIT));
+	if (!src) {
+		glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+		return;
+	}
+	const size_t src_row = size_t(prev.width) * 4;
+	const bool swap_rb = !ihs_fourcc_is_rgba(p_target.fourcc);
+	for (uint32_t y = 0; y < ch; y++) {
+		const uint8_t *s = src + y * src_row;
+		uint8_t *d = static_cast<uint8_t *>(p_target.pixels) + size_t(y) * p_target.cpu_stride;
+		if (!swap_rb) {
+			memcpy(d, s, size_t(cw) * 4);
+			continue;
+		}
+		// B,G,R,A target.
+		for (uint32_t x = 0; x < cw; x++) {
+			d[x * 4 + 0] = s[x * 4 + 2];
+			d[x * 4 + 1] = s[x * 4 + 1];
+			d[x * 4 + 2] = s[x * 4 + 0];
+			d[x * 4 + 3] = s[x * 4 + 3];
+		}
+	}
+	glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+	glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+
+	IhsState &state = IhsState::get();
+	state.capture.target_id = p_id;
+	state.capture.fence_fd = -1; // Copied on the CPU: complete.
+	state.capture.width = cw;
+	state.capture.height = ch;
 }
 
 void IhsRasterizerGLES3::blit_render_targets_to_screen(DisplayServerEnums::WindowID p_screen, const RenderingServerTypes::BlitToScreen *p_render_targets, int p_amount) {

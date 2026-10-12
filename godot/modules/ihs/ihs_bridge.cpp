@@ -125,7 +125,9 @@ int _iteration(void *p_instance, IhsGodotFrameInfo *r_out) {
 	}
 
 	GodotInstance *gi = _instance(p_instance);
+	state.iterating = true;
 	const bool quit = gi->is_started() ? gi->iteration() : true;
+	state.iterating = false;
 
 	const int fence = state.backend ? state.backend->end_iteration() : -1;
 	if (state.backend) {

@@ -102,6 +102,9 @@ public:
 	// --- capture ---
 	IhsCaptureBackend *backend = nullptr;
 	uint32_t next_target = IHS_GODOT_NO_TARGET;
+	// Inside IhsGodotApiV1::iteration: next_target is the producer's buffer
+	// for this frame, and it may be written.
+	bool iterating = false;
 	// Written by the backend during the iteration that captured, read and
 	// cleared by the bridge after it.
 	Capture capture;
