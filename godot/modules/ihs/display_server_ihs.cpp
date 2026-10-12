@@ -92,6 +92,19 @@ bool DisplayServerIhs::_init_vulkan() {
 	if (float(GLOBAL_GET(chunk)) > 0.25f) {
 		ProjectSettings::get_singleton()->set_setting(chunk, 0.25f);
 	}
+	// CPU targets read the frame back with texture_get_data_async, which
+	// copies in regions of texture_download_region_size_px (64 by default:
+	// 240 copies for 1280x720, each with a fixed cost on Adreno). Read in
+	// 1024 px regions; a region is never split across staging blocks, so a
+	// block holds a full 1024x1024 RGBA region.
+	const StringName region = "rendering/rendering_device/staging_buffer/texture_download_region_size_px";
+	if (int(GLOBAL_GET(region)) < 1024) {
+		ProjectSettings::get_singleton()->set_setting(region, 1024);
+	}
+	const StringName block = "rendering/rendering_device/staging_buffer/block_size_kb";
+	if (int(GLOBAL_GET(block)) < 4096) {
+		ProjectSettings::get_singleton()->set_setting(block, 4096);
+	}
 	rendering_device = memnew(RenderingDevice);
 	if (rendering_device->initialize(rendering_context, DisplayServerEnums::INVALID_WINDOW_ID) != OK) {
 		memdelete(rendering_device);

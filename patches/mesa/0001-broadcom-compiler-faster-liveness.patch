@@ -1,0 +1,128 @@
+broadcom/compiler: make liveness cheap enough to run after every spill
+
+The V3D register allocator spills one temporary at a time and rebuilds
+liveness (vir_calculate_live_intervals) after each spill. Godot's Mobile
+renderer has per-pixel-lit fragment shaders of ~14k instructions that
+spill ~650 times per strategy, and the 2-thread strategies are all tried
+in search of the fewest spills. Liveness was ~80% of compile time, in
+two places:
+
+- the defin/defout propagation pushes definitions to successors but
+  walked the blocks in reverse, so it needed about one full pass per
+  level of CFG depth to converge; walk in program order;
+- vir_compute_start_end tested every temp in every block, and
+  vir_setup_def_use cleared a per-temp array for every block; visit
+  only the set bits.
+
+The results are unchanged: every shader in the test scene compiles to
+the same QPU code (hashed) as before.
+
+Cold first frame of a Mobile-renderer scene (shadowed directional, omni
+and spot lights, fog, glow, PBR textures), V3D 7.1 under drm-shim on
+x86-64, Mesa 25.2.8 debugoptimized, shader cache off:
+
+  stock                                 173 s
+  this patch                             58-64 s
+  this patch + V3D_DEBUG=opt_compile_time 13 s
+
+Applies to Mesa 25.x only (src/broadcom/compiler/vir_live_variables.c).
+It does not apply to 26.x, and is not meant for it: Mesa main replaced the
+rebuild-after-every-spill loop with batched spills and incremental
+liveness (ac24bd75, f86312ee, c4cb1b20, af333031, 7bd40e5b; MR 44177),
+which upstream measured at 323-410 s -> 97-102 s on a Pi 5 for a PBR
+uber shader. Use that series, or the release that carries it, on 26.x.
+
+--- a/src/broadcom/compiler/vir_live_variables.c
++++ b/src/broadcom/compiler/vir_live_variables.c
+@@ -24,6 +24,7 @@
+ 
+ #define MAX_INSTRUCTION (1 << 30)
+ 
++#include "util/bitscan.h"
+ #include "util/ralloc.h"
+ #include "util/register_allocate.h"
+ #include "v3d_compiler.h"
+@@ -155,9 +156,6 @@
+         vir_for_each_block(block, c) {
+                 block->start_ip = ip;
+ 
+-                memset(partial_update, 0,
+-                       sizeof(struct partial_update_state) * c->num_temps);
+-
+                 struct qinst *flags_inst = NULL;
+ 
+                 vir_for_each_inst(inst, block) {
+@@ -201,6 +199,19 @@
+                         ip++;
+                 }
+                 block->end_ip = ip;
++
++                /* Only the block's own (partial) defs have state; clear just
++                 * those rather than the whole array for every block.
++                 */
++                for (int w = 0; w < BITSET_WORDS(c->num_temps); w++) {
++                        BITSET_WORD defs = block->defout[w];
++                        while (defs) {
++                                int var = w * BITSET_WORDBITS +
++                                          u_bit_scan(&defs);
++                                partial_update[var].inst = NULL;
++                                partial_update[var].flags_inst = NULL;
++                        }
++                }
+         }
+ 
+         ralloc_free(partial_update);
+@@ -247,7 +258,11 @@
+ {
+         bool cont = false;
+ 
+-        vir_for_each_block_rev(block, c) {
++        /* Definitions flow forward, so visit blocks in program order: a
++         * reverse walk needs one full pass per level of CFG depth to reach
++         * the fixed point, and this runs after every register spill.
++         */
++        vir_for_each_block(block, c) {
+                 /* Propagate defin/defout down the successors to produce the
+                  * union of blocks with a reachable (partial) definition of
+                  * the var.
+@@ -274,20 +289,25 @@
+  * new information calculated from control flow.
+  */
+ static void
+-vir_compute_start_end(struct v3d_compile *c, int num_vars)
++vir_compute_start_end(struct v3d_compile *c, int bitset_words)
+ {
++        /* Walk only the set bits: this runs after every register spill, and
++         * the live sets are sparse next to the temp count of a large shader.
++         */
+         vir_for_each_block(block, c) {
+-                for (int i = 0; i < num_vars; i++) {
+-                        if (BITSET_TEST(block->live_in, i) &&
+-                            BITSET_TEST(block->defin, i)) {
++                for (int w = 0; w < bitset_words; w++) {
++                        BITSET_WORD in = block->live_in[w] & block->defin[w];
++                        while (in) {
++                                int i = w * BITSET_WORDBITS + u_bit_scan(&in);
+                                 c->temp_start[i] = MIN2(c->temp_start[i],
+                                                         block->start_ip);
+                                 c->temp_end[i] = MAX2(c->temp_end[i],
+                                                       block->start_ip);
+                         }
+ 
+-                        if (BITSET_TEST(block->live_out, i) &&
+-                            BITSET_TEST(block->defout, i)) {
++                        BITSET_WORD out = block->live_out[w] & block->defout[w];
++                        while (out) {
++                                int i = w * BITSET_WORDBITS + u_bit_scan(&out);
+                                 c->temp_start[i] = MIN2(c->temp_start[i],
+                                                         block->end_ip);
+                                 c->temp_end[i] = MAX2(c->temp_end[i],
+@@ -344,7 +364,7 @@
+         while (vir_live_variables_defin_defout_dataflow(c, bitset_words))
+                 ;
+ 
+-        vir_compute_start_end(c, c->num_temps);
++        vir_compute_start_end(c, bitset_words);
+ 
+         c->live_intervals_valid = true;
+ }

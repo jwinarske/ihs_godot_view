@@ -209,15 +209,26 @@ tps-demo main menu, release builds, ETC2/ASTC pack:
 
 | GPU (driver) | Backend | Renderer | Surfaces granted | FPS |
 | --- | --- | --- | --- | --- |
-| Adreno 640 (Qualcomm) | drm-kms-vulkan | Mobile | dmabuf, vk_image, shm | 45 (shm 5) |
+| Adreno 640 (Qualcomm) | drm-kms-vulkan | Mobile | dmabuf, vk_image, shm | 60 (vsync; shm 43–46) |
 | Adreno 640 (Qualcomm) | drm-kms-egl | Mobile | dmabuf, plane, egl_image | 45 |
 | V3D 7.1, Pi 5 (Mesa V3DV) | drm-kms-vulkan | Mobile, vertex shading | dmabuf, vk_image, shm | 27 at 1280×1440 |
 | V3D 7.1, Pi 5 (Mesa V3D) | drm-kms-vulkan | GL compatibility | dmabuf | 12 at 1280×1440 |
 | GC7000UL, i.MX 8M Plus (Vivante) | drm-kms-egl | Mobile | dmabuf | 4, 3D missing |
 | GC7000UL, i.MX 8M Plus (Vivante) | drm-kms-egl | GL compatibility | dmabuf | 1 at 1920×1080 |
 
-On the Pi 5 the Mobile renderer needs per-vertex lighting; put an
-`override.cfg` next to the `.pck`:
+On the Pi 5 with Mesa 25.x, start the shell with
+`V3D_DEBUG=opt_compile_time` in its environment (the shell's command line,
+or `Environment=` in its systemd unit). Mesa reads it once, when the process
+creates its first Vulkan instance, so the plugin cannot set it later; the
+module logs a hint when it finds Mesa 25 V3DV without it. Without it the
+Mobile renderer's per-pixel-lit pipelines take longer to compile than anyone
+will wait (see "Limits and notes"). With it, and better still with Mesa
+rebuilt with
+[`patches/mesa/0001-broadcom-compiler-faster-liveness.patch`](patches/mesa/0001-broadcom-compiler-faster-liveness.patch),
+per-pixel lighting compiles. Mesa 26 removed the option, and the patch does
+not apply there; see "Limits and notes". Per-vertex lighting is the cheaper
+option on the GPU either way, and it is what the FPS above was measured
+with; put an `override.cfg` next to the `.pck`:
 
 ```ini
 [rendering]
@@ -225,9 +236,8 @@ On the Pi 5 the Mobile renderer needs per-vertex lighting; put an
 shading/overrides/force_vertex_shading=true
 ```
 
-The first launch compiles pipelines for a few minutes; Mesa's shader cache
-makes later launches start in seconds. See "Limits and notes" for the
-Vivante results.
+Pipelines compile on the first launch; Mesa's shader cache makes later
+launches start in seconds. See "Limits and notes" for the Vivante results.
 
 ## Using it from Flutter
 
@@ -320,7 +330,15 @@ cmake --build build/test && ctest --test-dir build/test --output-on-failure
   cache, and lets the module add a semaphore to each frame's submission; the
   module exports it as the frame's sync_file acquire fence. A device that
   cannot export semaphores as sync_files keeps one frame in flight, as does
-  `IHS_GODOT_FRAMES_IN_FLIGHT=1`. CPU targets (shm) read back synchronously.
+  `IHS_GODOT_FRAMES_IN_FLIGHT=1`.
+* **CPU targets (shm) show the previous frame.** The readback is
+  asynchronous: Vulkan copies into RenderingDevice's download staging and
+  the pixels arrive when that frame retires, GL reads into one of two pixel
+  pack buffers behind a fence. Either way the pixels go into the CPU target
+  of the iteration they land in, so the CPU never waits for the frame it
+  just drew, at one frame of extra latency (none on Vulkan with one frame
+  in flight). The first frame then reports nothing captured, and the frame
+  after a resize is the old size, cropped.
 * **The game's GPU queue runs at low priority** (`VK_KHR_global_priority`
   or `VK_EXT_global_priority`, when the device has one). With two frames in
   flight the game's next frame is already on the GPU when the shell
@@ -345,11 +363,41 @@ cmake --build build/test && ctest --test-dir build/test --output-on-failure
   will refuse (multi-plane modifiers are allocated at the exact height). If
   you see that abort, the line before the fallback names the import that
   failed.
-* **V3DV and large fragment shaders (Pi 5).** Mesa's V3D register allocator
-  spills one temporary at a time and recomputes liveness after each spill,
-  so the Mobile renderer's per-pixel-lit fragment shaders take longer than
-  any practical wait to compile (none returned in 10 minutes) and no frame
-  is drawn. `force_vertex_shading` brings each pipeline to 5–12 s.
+* **V3DV and large fragment shaders (Pi 5).** The Mobile renderer's
+  per-pixel-lit scene shaders come to ~14k V3D instructions with ~650
+  register spills. Mesa's V3D register allocator spills one temporary at a
+  time and rebuilds liveness after each spill. It then compiles the shader
+  again with each remaining 2-thread strategy, up to 7 in all, to find the
+  one with the fewest spills, which cut spills by about 6% here. On the
+  board no pipeline returned in 10 minutes. Measured on x86-64 against V3D
+  7.1 through Mesa's drm-shim (Mesa 25.2.8, shader cache off), first frame
+  of a Mobile scene with shadowed directional, omni and spot lights, fog and
+  PBR textures:
+
+  | Mesa | Per-pixel | `force_vertex_shading` |
+  | --- | --- | --- |
+  | stock | 173 s | n/m |
+  | stock, `V3D_DEBUG=opt_compile_time` | 24 s | n/m |
+  | liveness patch | 58–64 s | 3.7 s |
+  | liveness patch, `opt_compile_time` | 13 s | n/m |
+
+  n/m: not measured. `opt_compile_time` keeps the first 2-thread strategy
+  that allocates. The patch
+  ([`patches/mesa/`](patches/mesa/0001-broadcom-compiler-faster-liveness.patch),
+  Mesa 25.x only: 25.0 and 25.2) makes the liveness pass cheaper and leaves
+  the generated code bit-for-bit the same. A Pi 5 core is slower than the
+  x86 one these were taken on, so expect longer times on the board.
+
+  Mesa 26 (Raspberry Pi OS trixie backports ship 26.2.2) picks strategies
+  from a register-pressure probe and caps the spill budget at the best
+  result so far, and removed `opt_compile_time`. The liveness rebuild after
+  each spill is unchanged: on a Pi 5 with 26.2.2 no per-pixel pipeline
+  returned in 10 minutes. The patch is for Mesa 25.x only; it does not
+  apply to 26.x. Mesa main fixes the cost upstream instead: spills in
+  batches, liveness rebuilt once per batch and then updated incrementally
+  (`ac24bd75`…`7bd40e5b`, MR 44177; upstream measured a PBR uber shader at
+  323–410 s → 97–102 s on a Pi 5). Until a release carries it, use
+  `force_vertex_shading` on Mesa 26.
 * **Vivante GC7000UL (i.MX 8M Plus), Vulkan.** The driver rejects scene
   pipelines at vertex/fragment link time with
   `VK_ERROR_INVALID_SHADER_NV`, for two reasons:
