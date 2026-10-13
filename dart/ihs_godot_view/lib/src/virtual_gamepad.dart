@@ -255,6 +255,9 @@ class _PadButtonState extends State<_PadButton> {
         ),
         child: Text(widget.label,
             style: TextStyle(
+                // Bundled with this package: the target may have no fonts.
+                fontFamily: 'IhsGodotViewLabel',
+                package: 'ihs_godot_view',
                 color: _down ? Colors.black : Colors.white,
                 fontWeight: FontWeight.bold)),
       ),
