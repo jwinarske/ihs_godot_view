@@ -57,8 +57,9 @@ void Log(LogLevel level, const char* fmt, ...) {
   va_start(ap, fmt);
   std::vsnprintf(line, sizeof(line), fmt, ap);
   va_end(ap);
-  static std::mutex mutex;
-  std::lock_guard<std::mutex> lock(mutex);
+  // Leaked: the engine thread may still log while exit() runs destructors.
+  static std::mutex* mutex = new std::mutex();
+  std::lock_guard<std::mutex> lock(*mutex);
   std::fprintf(stderr, "[ihs_godot_view] %s %s\n",
                kTags[static_cast<int>(level)], line);
   std::fflush(stderr);

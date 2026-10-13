@@ -68,11 +68,14 @@ class GodotRuntime {
   double ActiveDevicePixelRatio();
   void SetPaused(bool paused);
   void Shutdown();
+  // Stop the engine before the process's exit handlers run (see .cc).
+  void StopAtExit();
 
  private:
   GodotRuntime() = default;
   ~GodotRuntime();
 
+  static void OnExit();
   void ThreadMain();
   bool RunTasks(std::unique_lock<std::mutex>& lock);
   bool StartEngine(const std::shared_ptr<GodotView>& view);
@@ -89,6 +92,7 @@ class GodotRuntime {
   std::deque<std::function<void()>> tasks_;
   std::thread thread_;
   bool stop_ = false;
+  bool stopped_ = false;  // the engine thread finished shutting down
 
   std::mutex views_mutex_;
   std::map<int32_t, std::weak_ptr<GodotView>> views_;

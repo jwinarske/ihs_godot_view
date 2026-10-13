@@ -320,7 +320,10 @@ cmake --build build/test && ctest --test-dir build/test --output-on-failure
   disposed view (or a hot restart) detaches and the next view re-attaches to
   the same game. Two simultaneous views of the game are refused. When the
   game quits (`get_tree().quit()`) the app gets a `quit` event and Godot
-  cannot be started again in that process.
+  cannot be started again in that process. When the process exits, the
+  plugin shuts Godot down and joins its threads before the exit handlers
+  tear down the libraries under them (the driver's shader compiler, static
+  locks); it waits up to 10 s, then exits without it.
 * **Engine patch.** Upstream, a RenderingDevice without a window runs a
   single frame in flight and skips Godot's pipeline cache, so the CPU waits
   for every GPU frame and shaders compile at each launch.

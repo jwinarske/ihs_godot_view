@@ -415,6 +415,9 @@ int main(int argc, char** argv) {
   host.unregister_factory = UnregisterFactory;
   host.query_capabilities = QueryCaps;
   g.vk_mode = argc > 5 && std::string(argv[5]) == "vk_image";
+  // "exit": leave the engine running and return from main, as a host process
+  // does; the plugin's exit handler has to stop it.
+  const bool at_exit = argc > 5 && std::string(argv[5]) == "exit";
   if (g.vk_mode && !InitVulkan()) {
     std::fprintf(stderr, "no Vulkan device for the mock shell\n");
     return 1;
@@ -548,7 +551,9 @@ int main(int argc, char** argv) {
     t.first.release(t.first.release_user_data, t.first.image,
                     t.first.buffer_id);
   }
-  shutdown();
+  if (!at_exit) {
+    shutdown();
+  }
   Revoke(nullptr, nullptr);
   if (g.vk_mode) {
     vkDeviceWaitIdle(g.device);

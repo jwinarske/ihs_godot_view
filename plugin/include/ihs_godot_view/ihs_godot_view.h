@@ -155,7 +155,8 @@ IHS_GODOT_VIEW_EXPORT void ihs_godot_view_set_paused(int32_t paused);
 
 /* Stop the engine and join its thread. Godot cannot be restarted in the same
  * process afterwards. Never call from the platform thread while a view is
- * live. */
+ * live. Not needed at process exit: the plugin stops the engine itself from
+ * an exit handler. */
 IHS_GODOT_VIEW_EXPORT void ihs_godot_view_shutdown(void);
 
 #ifdef __cplusplus

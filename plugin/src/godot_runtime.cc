@@ -35,6 +35,9 @@ namespace ihs_godot {
 namespace {
 
 constexpr auto kIdlePeriod = std::chrono::milliseconds(100);
+// How long the process waits at exit for Godot to shut down before leaving
+// without it.
+constexpr auto kExitTimeout = std::chrono::seconds(10);
 constexpr auto kDefaultPeriod = std::chrono::microseconds(16667);
 
 std::string DirOf(const std::string& path) {
@@ -111,6 +114,7 @@ void GodotRuntime::Detach(int32_t view_id) {
   if (!view) {
     return;
   }
+  StopAtExit();
   Post([this, view] {
     view->Teardown();
     if (active_ == view) {
@@ -179,6 +183,42 @@ void GodotRuntime::Shutdown() {
   }
 }
 
+// The engine outlives every view (a hot restart re-attaches to it), so a view's
+// dispose does not stop it, and nothing else does before the host process
+// exits. Left running, its threads keep calling into libraries that exit()
+// is tearing down under them: on Adreno the shader compiler's LLVM asserts
+// mid-compile, and locks destroyed by static destructors abort the process.
+//
+// exit() runs its handlers newest first, so the handler is registered again
+// at every dispose and once the engine has started: by then every library
+// Godot and its driver loaded has registered its own static destructors, and
+// this one runs ahead of them.
+void GodotRuntime::StopAtExit() {
+  std::atexit(&GodotRuntime::OnExit);
+}
+
+void GodotRuntime::OnExit() {
+  GodotRuntime& self = Get();
+  std::unique_lock<std::mutex> lock(self.mutex_);
+  if (!self.thread_.joinable() ||
+      self.thread_.get_id() == std::this_thread::get_id()) {
+    return;  // never started, already joined, or exit() from the engine thread
+  }
+  self.stop_ = true;
+  self.cv_.notify_all();
+  // Bounded: an engine stuck in a scene load or a driver call must not keep
+  // the process from exiting.
+  if (!self.cv_.wait_for(lock, kExitTimeout,
+                         [&self] { return self.stopped_; })) {
+    LOG_E("Godot did not shut down within %lld s; exiting without it",
+          static_cast<long long>(kExitTimeout.count()));
+    ::_exit(EXIT_FAILURE);
+  }
+  lock.unlock();
+  self.thread_.join();
+  LOG_I("Godot stopped at exit");
+}
+
 bool GodotRuntime::RunTasks(std::unique_lock<std::mutex>& lock) {
   if (tasks_.empty()) {
     return false;
@@ -229,6 +269,11 @@ void GodotRuntime::ThreadMain() {
   }
   instance_ = nullptr;
   engine_dead_ = true;
+
+  lock.lock();
+  stopped_ = true;
+  lock.unlock();
+  cv_.notify_all();
 }
 
 void GodotRuntime::Pace() {
@@ -383,6 +428,7 @@ bool GodotRuntime::StartEngine(const std::shared_ptr<GodotView>& view) {
     return false;
   }
   next_frame_ = std::chrono::steady_clock::now();
+  StopAtExit();
   return true;
 }
 
