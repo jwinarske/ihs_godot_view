@@ -20,8 +20,10 @@
 #include <pthread.h>
 #include <unistd.h>
 
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <future>
 #include <vector>
 
 #include <ihs/platform_view.h>
@@ -35,8 +37,11 @@ namespace ihs_godot {
 namespace {
 
 constexpr auto kIdlePeriod = std::chrono::milliseconds(100);
-// How long the process waits at exit for Godot to shut down before leaving
-// without it.
+// At exit: how long the engine gets to finish its current iteration, and then
+// to shut down, before the process leaves without it.
+constexpr auto kExitBusyTimeout = std::chrono::seconds(2);
+// How long a view's dispose waits for the engine to finish its iteration.
+constexpr auto kDetachTimeout = std::chrono::seconds(5);
 constexpr auto kExitTimeout = std::chrono::seconds(10);
 constexpr auto kDefaultPeriod = std::chrono::microseconds(16667);
 
@@ -114,18 +119,29 @@ void GodotRuntime::Detach(int32_t view_id) {
   if (!view) {
     return;
   }
-  StopAtExit();
-  Post([this, view] {
+  auto done = std::make_shared<std::promise<void>>();
+  std::future<void> detached = done->get_future();
+  Post([this, view, done] {
     view->Teardown();
     if (active_ == view) {
       active_.reset();
       if (const IhsGodotApiV1* api = api_.load()) {
-        // Keep the game, stop drawing it until a view attaches again.
+        // Keep the game; it pauses until a view attaches again.
         api->set_visible(0);
         api->notify(instance_, IHS_GODOT_FOCUS_OUT);
       }
     }
+    done->set_value();
   });
+  // Wait for the engine to finish the iteration in flight: with no view it
+  // then pauses, so nothing it does lands after the exit handler registered
+  // below (see StopAtExit). Bounded, for an iteration loading a scene.
+  if (thread_.get_id() != std::this_thread::get_id() &&
+      detached.wait_for(kDetachTimeout) != std::future_status::ready) {
+    LOG_W("view %d: Godot is busy; detached without waiting for it",
+          view_id);
+  }
+  StopAtExit();
 }
 
 void GodotRuntime::Post(std::function<void()> task) {
@@ -187,17 +203,23 @@ void GodotRuntime::Shutdown() {
 // dispose does not stop it, and nothing else does before the host process
 // exits. Left running, its threads keep calling into libraries that exit()
 // is tearing down under them: on Adreno the shader compiler's LLVM asserts
-// mid-compile, and locks destroyed by static destructors abort the process.
+// mid-compile, and Godot's own statics are destroyed under a running frame.
 //
-// exit() runs its handlers newest first, so the handler is registered again
-// at every dispose and once the engine has started: by then every library
-// Godot and its driver loaded has registered its own static destructors, and
-// this one runs ahead of them.
+// exit() runs its handlers newest first, and anything Godot registers after
+// this handler (a library it loads, a function-local static it first
+// touches) is destroyed before the handler gets to stop it. So the handler is
+// registered once the engine has started, and again at every dispose after
+// the engine has finished its iteration and paused for want of a view; a
+// paused engine registers nothing further.
 void GodotRuntime::StopAtExit() {
-  std::atexit(&GodotRuntime::OnExit);
+#if defined(__GLIBC__)
+  on_exit(&GodotRuntime::OnExit, nullptr);
+#else
+  std::atexit([] { OnExit(EXIT_SUCCESS, nullptr); });
+#endif
 }
 
-void GodotRuntime::OnExit() {
+void GodotRuntime::OnExit(int status, void* /*arg*/) {
   GodotRuntime& self = Get();
   std::unique_lock<std::mutex> lock(self.mutex_);
   if (!self.thread_.joinable() ||
@@ -206,13 +228,21 @@ void GodotRuntime::OnExit() {
   }
   self.stop_ = true;
   self.cv_.notify_all();
-  // Bounded: an engine stuck in a scene load or a driver call must not keep
-  // the process from exiting.
-  if (!self.cv_.wait_for(lock, kExitTimeout,
-                         [&self] { return self.stopped_; })) {
-    LOG_E("Godot did not shut down within %lld s; exiting without it",
-          static_cast<long long>(kExitTimeout.count()));
-    ::_exit(EXIT_FAILURE);
+  // An iteration that loads a scene or compiles shaders can run for minutes
+  // and cannot be interrupted. Leave without the destructors rather than wait
+  // it out; _exit() takes the engine's threads down with the process.
+  const char* why = nullptr;
+  if (!self.cv_.wait_for(lock, kExitBusyTimeout,
+                         [&self] { return self.stopping_; })) {
+    why = "is busy (loading a scene?)";
+  } else if (!self.cv_.wait_for(lock, kExitTimeout,
+                                [&self] { return self.stopped_; })) {
+    why = "did not finish shutting down";
+  }
+  if (why != nullptr) {
+    LOG_W("Godot %s; exiting without shutting it down", why);
+    std::fflush(nullptr);
+    ::_exit(status);
   }
   lock.unlock();
   self.thread_.join();
@@ -242,7 +272,8 @@ void GodotRuntime::ThreadMain() {
     if (stop_) {
       break;
     }
-    if (instance_ == nullptr || engine_dead_) {
+    // No view: the game pauses until one attaches (or the process exits).
+    if (instance_ == nullptr || engine_dead_ || !active_) {
       cv_.wait(lock, pending);
       continue;
     }
@@ -256,7 +287,9 @@ void GodotRuntime::ThreadMain() {
     Pace();
     lock.lock();
   }
+  stopping_ = true;
   lock.unlock();
+  cv_.notify_all();
 
   // Shutdown, on the thread Godot belongs to.
   if (active_) {

@@ -75,7 +75,7 @@ class GodotRuntime {
   GodotRuntime() = default;
   ~GodotRuntime();
 
-  static void OnExit();
+  static void OnExit(int status, void* arg);
   void ThreadMain();
   bool RunTasks(std::unique_lock<std::mutex>& lock);
   bool StartEngine(const std::shared_ptr<GodotView>& view);
@@ -92,7 +92,8 @@ class GodotRuntime {
   std::deque<std::function<void()>> tasks_;
   std::thread thread_;
   bool stop_ = false;
-  bool stopped_ = false;  // the engine thread finished shutting down
+  bool stopping_ = false;  // the engine thread left its loop to shut down
+  bool stopped_ = false;   // and finished
 
   std::mutex views_mutex_;
   std::map<int32_t, std::weak_ptr<GodotView>> views_;

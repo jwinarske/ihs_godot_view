@@ -318,12 +318,14 @@ cmake --build build/test && ctest --test-dir build/test --output-on-failure
 * **One Godot per process.** LibGodot creates one instance and cannot set
   Godot up twice. The engine starts with the first view and outlives it: a
   disposed view (or a hot restart) detaches and the next view re-attaches to
-  the same game. Two simultaneous views of the game are refused. When the
-  game quits (`get_tree().quit()`) the app gets a `quit` event and Godot
-  cannot be started again in that process. When the process exits, the
+  the same game, which pauses while no view is attached. Two simultaneous
+  views of the game are refused. When the game quits (`get_tree().quit()`)
+  the app gets a `quit` event and Godot cannot be started again in that
+  process. When the process exits, the
   plugin shuts Godot down and joins its threads before the exit handlers
   tear down the libraries under them (the driver's shader compiler, static
-  locks); it waits up to 10 s, then exits without it.
+  locks). An engine busy loading a scene cannot be interrupted, so after
+  2 s the process exits with `_exit()` instead, skipping those destructors.
 * **Engine patch.** Upstream, a RenderingDevice without a window runs a
   single frame in flight and skips Godot's pipeline cache, so the CPU waits
   for every GPU frame and shaders compile at each launch.
