@@ -45,6 +45,26 @@ constexpr auto kDetachTimeout = std::chrono::seconds(5);
 constexpr auto kExitTimeout = std::chrono::seconds(10);
 constexpr auto kDefaultPeriod = std::chrono::microseconds(16667);
 
+// The part of Dart's dart_native_api.h that Emit uses: a Dart_CObject is a
+// type tag and a union, and Dart_PostCObject copies it into a message. The
+// layout has been stable since Dart 2; the union is padded to its full size.
+struct DartCObject {
+  int32_t type;
+  union {
+    int32_t as_int32;
+    const char* as_string;
+    struct {
+      intptr_t length;
+      DartCObject** values;
+    } as_array;
+    unsigned char size[40];
+  } value;
+};
+constexpr int32_t kDartCObjectInt32 = 2;
+constexpr int32_t kDartCObjectString = 5;
+constexpr int32_t kDartCObjectArray = 6;
+using DartPostCObject = bool (*)(int64_t port, DartCObject* message);
+
 std::string DirOf(const std::string& path) {
   const size_t slash = path.rfind('/');
   return slash == std::string::npos ? std::string() : path.substr(0, slash);
@@ -163,9 +183,33 @@ double GodotRuntime::ActiveDevicePixelRatio() {
   return view ? view->device_pixel_ratio() : 1.0;
 }
 
+void GodotRuntime::SetDartPort(int64_t port, void* post_cobject) {
+  std::lock_guard<std::mutex> lock(dart_mutex_);
+  dart_port_ = port;
+  dart_post_ = post_cobject;
+}
+
 void GodotRuntime::Emit(int32_t view_id,
                         IhsGodotViewEvent event,
                         const std::string& text) {
+  {
+    std::lock_guard<std::mutex> lock(dart_mutex_);
+    if (dart_post_ != nullptr) {
+      DartCObject id{kDartCObjectInt32, {}};
+      id.value.as_int32 = view_id;
+      DartCObject ev{kDartCObjectInt32, {}};
+      ev.value.as_int32 = static_cast<int32_t>(event);
+      DartCObject payload{kDartCObjectString, {}};
+      payload.value.as_string = text.c_str();
+      DartCObject* items[] = {&id, &ev, &payload};
+      DartCObject list{kDartCObjectArray, {}};
+      list.value.as_array.length = 3;
+      list.value.as_array.values = items;
+      // False once the port's isolate has gone; the event is dropped.
+      reinterpret_cast<DartPostCObject>(dart_post_)(dart_port_, &list);
+      return;
+    }
+  }
   IhsGodotViewListener listener = listener_.load();
   if (listener == nullptr) {
     return;

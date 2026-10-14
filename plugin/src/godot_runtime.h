@@ -63,6 +63,7 @@ class GodotRuntime {
   [[nodiscard]] const IhsGodotApiV1* api() const { return api_.load(); }
   uint32_t NewTargetId() { return next_target_id_.fetch_add(1); }
   void SetListener(IhsGodotViewListener listener) { listener_ = listener; }
+  void SetDartPort(int64_t port, void* post_cobject);
   void Emit(int32_t view_id, IhsGodotViewEvent event, const std::string& text);
   [[nodiscard]] int32_t active_view_id() const { return active_id_.load(); }
   double ActiveDevicePixelRatio();
@@ -102,6 +103,9 @@ class GodotRuntime {
   std::atomic<const IhsGodotApiV1*> api_{nullptr};
   std::atomic<uint32_t> next_target_id_{1};
   std::atomic<IhsGodotViewListener> listener_{nullptr};
+  std::mutex dart_mutex_;  // guards the pair below
+  int64_t dart_port_ = 0;
+  void* dart_post_ = nullptr;  // NativeApi.postCObject
 
   // Engine thread only.
   void* libgodot_ = nullptr;
