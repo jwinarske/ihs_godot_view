@@ -163,6 +163,9 @@ class GodotView : public std::enable_shared_from_this<GodotView> {
   std::vector<FourccModifier> godot_formats_;
   // A preference forced after a path failed (shm floor).
   bool force_shm_ = false;
+  // dma-buf retried with LINEAR only, after a grant came back with a
+  // modifier Godot cannot render into.
+  bool linear_only_ = false;
   uint64_t negotiate_serial_ = 0;
 
   // Handle and dispose guarantee.

@@ -274,6 +274,14 @@ void GodotView::NegotiateOnPlatform() {
     f.godot_target_types = renderer_.target_types;
     f.godot_vulkan = renderer_.api == IHS_GODOT_API_VULKAN;
     f.godot_formats = godot_formats_;
+    if (linear_only_) {
+      auto& fs = f.godot_formats;
+      fs.erase(std::remove_if(fs.begin(), fs.end(),
+                              [](const FourccModifier& fm) {
+                                return fm.modifier != 0;  // MOD_LINEAR
+                              }),
+               fs.end());
+    }
     f.same_vk_device =
         has_vk_ && f.godot_vulkan &&
         std::memcmp(shell_uuid_, renderer_.device_uuid, 16) == 0;
@@ -340,19 +348,25 @@ void GodotView::NegotiateOnPlatform() {
     n->granted_kind = grant.granted_kind;
     n->format = {grant.format.fourcc, grant.format.modifier};
 
-    // A plane grant may come back with the modifier the plane can scan out
-    // rather than one asked for; Godot must be able to render it.
+    // A dma-buf grant may come back with a modifier a plane can scan out
+    // rather than one asked for (ivi-homescreen picks it from its own list);
+    // Godot must be able to render it. Ask again for LINEAR only, which
+    // planes scan out widely, then fall to the software floor.
     if (n->path == SurfacePath::kDmabuf &&
         std::find(f.godot_formats.begin(), f.godot_formats.end(), n->format) ==
             f.godot_formats.end()) {
-      LOG_W("view %d: granted format %.4s/0x%" PRIx64
-            " is not one Godot renders into; using the software floor",
-            id_, reinterpret_cast<const char*>(&n->format.fourcc),
-            n->format.modifier);
+      bool retry_linear = false;
       {
         std::lock_guard<std::mutex> lock(facts_mutex_);
-        force_shm_ = true;
+        retry_linear = !linear_only_;
+        linear_only_ = true;
+        force_shm_ = !retry_linear;
       }
+      LOG_W("view %d: granted format %.4s/0x%" PRIx64
+            " is not one Godot renders into; %s",
+            id_, reinterpret_cast<const char*>(&n->format.fourcc),
+            n->format.modifier,
+            retry_linear ? "asking for LINEAR" : "using the software floor");
       NegotiateOnPlatform();
       return;
     }
