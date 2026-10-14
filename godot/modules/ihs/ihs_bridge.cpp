@@ -155,6 +155,9 @@ int _iteration(void *p_instance, IhsGodotFrameInfo *r_out) {
 
 void _destroy_instance(void *p_instance) {
 	if (p_instance) {
+		if (IhsCaptureBackend *backend = IhsState::get().backend) {
+			backend->wait_idle();
+		}
 		libgodot_destroy_godot_instance(reinterpret_cast<GDExtensionObjectPtr>(p_instance));
 	}
 }

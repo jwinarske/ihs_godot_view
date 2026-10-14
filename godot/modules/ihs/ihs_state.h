@@ -36,6 +36,9 @@ public:
 	// After each iteration: a sync_file the caller owns that signals when this
 	// iteration's capture is complete, or -1 when it already is.
 	virtual int end_iteration() { return -1; }
+	// Before the engine is torn down: wait for the GPU to finish this
+	// renderer's work, so none is still reading what the teardown frees.
+	virtual void wait_idle() {}
 };
 
 // Process-global module state shared by the bridge, the display server and

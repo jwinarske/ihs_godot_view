@@ -30,6 +30,12 @@ IhsCaptureGLES3::~IhsCaptureGLES3() {
 	}
 }
 
+// On panfrost (RK3566, Linux 6.1 BSP) GL work still queued when the context
+// and its buffers go away faults the GPU MMU at exit.
+void IhsCaptureGLES3::wait_idle() {
+	glFinish();
+}
+
 uint32_t IhsCaptureGLES3::get_api() const {
 	return egl->gles ? IHS_GODOT_API_GLES : IHS_GODOT_API_OPENGL;
 }
