@@ -215,6 +215,8 @@ tps-demo main menu, release builds, ETC2/ASTC pack:
 | V3D 7.1, Pi 5 (Mesa V3D) | drm-kms-vulkan | GL compatibility | dmabuf | 12 at 1280×1440 |
 | GC7000UL, i.MX 8M Plus (Vivante) | drm-kms-egl | Mobile | dmabuf | 4, 3D missing |
 | GC7000UL, i.MX 8M Plus (Vivante) | drm-kms-egl | GL compatibility | dmabuf | 1 at 1920×1080 |
+| Mali-G52, Radxa Zero 3 (Mesa main PanVK) | drm-kms-egl | Mobile | dmabuf | 4 at 1280×1440 |
+| Mali-G52, Radxa Zero 3 (Mesa 24.2 panfrost) | drm-kms-egl | GL compatibility | dmabuf, shm | 4, 3D missing |
 
 On the Pi 5 with Mesa 25.x, start the shell with
 `V3D_DEBUG=opt_compile_time` in its environment (the shell's command line,
@@ -235,6 +237,14 @@ with; put an `override.cfg` next to the `.pck`:
 
 shading/overrides/force_vertex_shading=true
 ```
+
+On the Radxa Zero 3 (RK3566), use Vulkan with the Mobile renderer
+(`IHS_GODOT_RENDERING_DRIVER=vulkan IHS_GODOT_RENDERING_METHOD=mobile`).
+Vulkan there is PanVK from a Mesa main build, which Bifrost GPUs enable only
+with `PAN_I_WANT_A_BROKEN_VULKAN_DRIVER=1`. Forward+ is too slow for the
+Mali-G52: at 1280×1440 one fragment job of the menu (the lit floor) outlasts
+the panfrost kernel driver's job timeout, the GPU is reset about every 2 s,
+and the frame is left with undrawn tiles at 1 FPS.
 
 Pipelines compile on the first launch; Mesa's shader cache makes later
 launches start in seconds. See "Limits and notes" for the Vivante results.
