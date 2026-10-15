@@ -176,6 +176,14 @@ if (GODOT_PATH_OVERRIDES)
 endif ()
 
 set(_env "")
+# Godot links libstdc++ and libgcc statically (use_static_cpp) and, as a
+# shared library, would export them. A host whose C++ runtime is another one
+# (libc++ on the SA8155P) then interposes on part of them: libgodot's own
+# operator new, exception and static-init calls bind to the host's runtime
+# while the rest of its libstdc++ stays inside. Keep the archives' symbols
+# local, so libgodot uses one runtime. Only the runtime's archives: Godot's
+# own (its modules, ihs's bridge entry point) are archives too.
+set(_linkflags "-Wl,--exclude-libs,libstdc++.a:libsupc++.a:libgcc.a:libgcc_eh.a")
 if (CMAKE_CROSSCOMPILING OR CMAKE_C_COMPILER OR CMAKE_CXX_COMPILER)
     if (CMAKE_C_COMPILER)
         list(APPEND _args "CC=${CMAKE_C_COMPILER}")
@@ -184,7 +192,6 @@ if (CMAKE_CROSSCOMPILING OR CMAKE_C_COMPILER OR CMAKE_CXX_COMPILER)
         list(APPEND _args "CXX=${CMAKE_CXX_COMPILER}" "LINK=${CMAKE_CXX_COMPILER}")
     endif ()
     set(_ccflags "")
-    set(_linkflags "")
     if (CMAKE_SYSROOT)
         string(APPEND _ccflags " --sysroot=${CMAKE_SYSROOT}")
         string(APPEND _linkflags " --sysroot=${CMAKE_SYSROOT}")
@@ -205,9 +212,6 @@ if (CMAKE_CROSSCOMPILING OR CMAKE_C_COMPILER OR CMAKE_CXX_COMPILER)
     if (_ccflags)
         list(APPEND _args "ccflags=${_ccflags}")
     endif ()
-    if (_linkflags)
-        list(APPEND _args "linkflags=${_linkflags}")
-    endif ()
 
     # SCons runs plain `ar`/`ranlib`; a host binutils cannot index foreign
     # objects. Put the toolchain's under those names, first on PATH.
@@ -226,6 +230,8 @@ if (CMAKE_CROSSCOMPILING OR CMAKE_C_COMPILER OR CMAKE_CXX_COMPILER)
                 "PKG_CONFIG_LIBDIR=${CMAKE_SYSROOT}/usr/lib/pkgconfig:${CMAKE_SYSROOT}/usr/share/pkgconfig:${CMAKE_SYSROOT}/usr/lib/${CMAKE_LIBRARY_ARCHITECTURE}/pkgconfig")
     endif ()
 endif ()
+string(STRIP "${_linkflags}" _linkflags)
+list(APPEND _args "linkflags=${_linkflags}")
 
 if (GODOT_JOBS)
     list(APPEND _args -j${GODOT_JOBS})
