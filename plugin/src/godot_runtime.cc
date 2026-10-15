@@ -20,8 +20,10 @@
 #include <pthread.h>
 #include <unistd.h>
 
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <future>
 #include <vector>
 
 #include <ihs/platform_view.h>
@@ -35,7 +37,33 @@ namespace ihs_godot {
 namespace {
 
 constexpr auto kIdlePeriod = std::chrono::milliseconds(100);
+// At exit: how long the engine gets to finish its current iteration, and then
+// to shut down, before the process leaves without it.
+constexpr auto kExitBusyTimeout = std::chrono::seconds(2);
+// How long a view's dispose waits for the engine to finish its iteration.
+constexpr auto kDetachTimeout = std::chrono::seconds(5);
+constexpr auto kExitTimeout = std::chrono::seconds(10);
 constexpr auto kDefaultPeriod = std::chrono::microseconds(16667);
+
+// The part of Dart's dart_native_api.h that Emit uses: a Dart_CObject is a
+// type tag and a union, and Dart_PostCObject copies it into a message. The
+// layout has been stable since Dart 2; the union is padded to its full size.
+struct DartCObject {
+  int32_t type;
+  union {
+    int32_t as_int32;
+    const char* as_string;
+    struct {
+      intptr_t length;
+      DartCObject** values;
+    } as_array;
+    unsigned char size[40];
+  } value;
+};
+constexpr int32_t kDartCObjectInt32 = 2;
+constexpr int32_t kDartCObjectString = 5;
+constexpr int32_t kDartCObjectArray = 6;
+using DartPostCObject = bool (*)(int64_t port, DartCObject* message);
 
 std::string DirOf(const std::string& path) {
   const size_t slash = path.rfind('/');
@@ -111,17 +139,29 @@ void GodotRuntime::Detach(int32_t view_id) {
   if (!view) {
     return;
   }
-  Post([this, view] {
+  auto done = std::make_shared<std::promise<void>>();
+  std::future<void> detached = done->get_future();
+  Post([this, view, done] {
     view->Teardown();
     if (active_ == view) {
       active_.reset();
       if (const IhsGodotApiV1* api = api_.load()) {
-        // Keep the game, stop drawing it until a view attaches again.
+        // Keep the game; it pauses until a view attaches again.
         api->set_visible(0);
         api->notify(instance_, IHS_GODOT_FOCUS_OUT);
       }
     }
+    done->set_value();
   });
+  // Wait for the engine to finish the iteration in flight: with no view it
+  // then pauses, so nothing it does lands after the exit handler registered
+  // below (see StopAtExit). Bounded, for an iteration loading a scene.
+  if (thread_.get_id() != std::this_thread::get_id() &&
+      detached.wait_for(kDetachTimeout) != std::future_status::ready) {
+    LOG_W("view %d: Godot is busy; detached without waiting for it",
+          view_id);
+  }
+  StopAtExit();
 }
 
 void GodotRuntime::Post(std::function<void()> task) {
@@ -143,9 +183,33 @@ double GodotRuntime::ActiveDevicePixelRatio() {
   return view ? view->device_pixel_ratio() : 1.0;
 }
 
+void GodotRuntime::SetDartPort(int64_t port, void* post_cobject) {
+  std::lock_guard<std::mutex> lock(dart_mutex_);
+  dart_port_ = port;
+  dart_post_ = post_cobject;
+}
+
 void GodotRuntime::Emit(int32_t view_id,
                         IhsGodotViewEvent event,
                         const std::string& text) {
+  {
+    std::lock_guard<std::mutex> lock(dart_mutex_);
+    if (dart_post_ != nullptr) {
+      DartCObject id{kDartCObjectInt32, {}};
+      id.value.as_int32 = view_id;
+      DartCObject ev{kDartCObjectInt32, {}};
+      ev.value.as_int32 = static_cast<int32_t>(event);
+      DartCObject payload{kDartCObjectString, {}};
+      payload.value.as_string = text.c_str();
+      DartCObject* items[] = {&id, &ev, &payload};
+      DartCObject list{kDartCObjectArray, {}};
+      list.value.as_array.length = 3;
+      list.value.as_array.values = items;
+      // False once the port's isolate has gone; the event is dropped.
+      reinterpret_cast<DartPostCObject>(dart_post_)(dart_port_, &list);
+      return;
+    }
+  }
   IhsGodotViewListener listener = listener_.load();
   if (listener == nullptr) {
     return;
@@ -179,6 +243,56 @@ void GodotRuntime::Shutdown() {
   }
 }
 
+// The engine outlives every view (a hot restart re-attaches to it), so a view's
+// dispose does not stop it, and nothing else does before the host process
+// exits. Left running, its threads keep calling into libraries that exit()
+// is tearing down under them: on Adreno the shader compiler's LLVM asserts
+// mid-compile, and Godot's own statics are destroyed under a running frame.
+//
+// exit() runs its handlers newest first, and anything Godot registers after
+// this handler (a library it loads, a function-local static it first
+// touches) is destroyed before the handler gets to stop it. So the handler is
+// registered once the engine has started, and again at every dispose after
+// the engine has finished its iteration and paused for want of a view; a
+// paused engine registers nothing further.
+void GodotRuntime::StopAtExit() {
+#if defined(__GLIBC__)
+  on_exit(&GodotRuntime::OnExit, nullptr);
+#else
+  std::atexit([] { OnExit(EXIT_SUCCESS, nullptr); });
+#endif
+}
+
+void GodotRuntime::OnExit(int status, void* /*arg*/) {
+  GodotRuntime& self = Get();
+  std::unique_lock<std::mutex> lock(self.mutex_);
+  if (!self.thread_.joinable() ||
+      self.thread_.get_id() == std::this_thread::get_id()) {
+    return;  // never started, already joined, or exit() from the engine thread
+  }
+  self.stop_ = true;
+  self.cv_.notify_all();
+  // An iteration that loads a scene or compiles shaders can run for minutes
+  // and cannot be interrupted. Leave without the destructors rather than wait
+  // it out; _exit() takes the engine's threads down with the process.
+  const char* why = nullptr;
+  if (!self.cv_.wait_for(lock, kExitBusyTimeout,
+                         [&self] { return self.stopping_; })) {
+    why = "is busy (loading a scene?)";
+  } else if (!self.cv_.wait_for(lock, kExitTimeout,
+                                [&self] { return self.stopped_; })) {
+    why = "did not finish shutting down";
+  }
+  if (why != nullptr) {
+    LOG_W("Godot %s; exiting without shutting it down", why);
+    std::fflush(nullptr);
+    ::_exit(status);
+  }
+  lock.unlock();
+  self.thread_.join();
+  LOG_I("Godot stopped at exit");
+}
+
 bool GodotRuntime::RunTasks(std::unique_lock<std::mutex>& lock) {
   if (tasks_.empty()) {
     return false;
@@ -202,7 +316,8 @@ void GodotRuntime::ThreadMain() {
     if (stop_) {
       break;
     }
-    if (instance_ == nullptr || engine_dead_) {
+    // No view: the game pauses until one attaches (or the process exits).
+    if (instance_ == nullptr || engine_dead_ || !active_) {
       cv_.wait(lock, pending);
       continue;
     }
@@ -216,7 +331,9 @@ void GodotRuntime::ThreadMain() {
     Pace();
     lock.lock();
   }
+  stopping_ = true;
   lock.unlock();
+  cv_.notify_all();
 
   // Shutdown, on the thread Godot belongs to.
   if (active_) {
@@ -229,6 +346,11 @@ void GodotRuntime::ThreadMain() {
   }
   instance_ = nullptr;
   engine_dead_ = true;
+
+  lock.lock();
+  stopped_ = true;
+  lock.unlock();
+  cv_.notify_all();
 }
 
 void GodotRuntime::Pace() {
@@ -383,6 +505,7 @@ bool GodotRuntime::StartEngine(const std::shared_ptr<GodotView>& view) {
     return false;
   }
   next_frame_ = std::chrono::steady_clock::now();
+  StopAtExit();
   return true;
 }
 

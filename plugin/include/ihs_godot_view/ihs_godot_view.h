@@ -69,9 +69,11 @@ typedef enum IhsGodotViewEvent {
 } IhsGodotViewEvent;
 
 /*
- * Event listener. Called from the plugin's threads; with Dart, pass a
- * NativeCallable.listener. @payload is heap-allocated and owned by the
- * receiver, which releases it with ihs_godot_view_free_string().
+ * Event listener, for a C host. Called from the plugin's threads. @payload is
+ * heap-allocated and owned by the receiver, which releases it with
+ * ihs_godot_view_free_string(). Dart uses ihs_godot_view_set_dart_port
+ * instead: a NativeCallable.listener aborts the process when it is called
+ * after its isolate has gone, which an engine thread cannot rule out.
  */
 typedef void (*IhsGodotViewListener)(int32_t view_id,
                                      int32_t event,
@@ -84,6 +86,13 @@ IHS_GODOT_VIEW_EXPORT void ihs_godot_view_unregister(void);
 
 IHS_GODOT_VIEW_EXPORT void ihs_godot_view_set_listener(
     IhsGodotViewListener listener);
+
+/* Deliver events to a Dart ReceivePort: @port is its SendPort.nativePort and
+ * @post_cobject is NativeApi.postCObject. Each event arrives as the list
+ * [view_id, event, payload]. A port whose isolate has gone (a hot restart, the
+ * engine shutting down) drops the event. Takes precedence over a listener. */
+IHS_GODOT_VIEW_EXPORT void ihs_godot_view_set_dart_port(int64_t port,
+                                                        void* post_cobject);
 IHS_GODOT_VIEW_EXPORT void ihs_godot_view_free_string(char* payload);
 
 /* Pointer kinds and phases for ihs_godot_view_pointer. */
@@ -155,7 +164,8 @@ IHS_GODOT_VIEW_EXPORT void ihs_godot_view_set_paused(int32_t paused);
 
 /* Stop the engine and join its thread. Godot cannot be restarted in the same
  * process afterwards. Never call from the platform thread while a view is
- * live. */
+ * live. Not needed at process exit: the plugin stops the engine itself from
+ * an exit handler. */
 IHS_GODOT_VIEW_EXPORT void ihs_godot_view_shutdown(void);
 
 #ifdef __cplusplus

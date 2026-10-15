@@ -1,0 +1,36 @@
+# Radxa Zero 3 (RK3566, Mali-G52; Debian 12 bookworm) for the ihs_godot_view
+# example.
+#
+# An app layer over ivi-homescreen's rpi4-bookworm target (same name, so emb
+# merges this onto it): the target's Debian 12 arm64 toolchain and image fit
+# the Radxa's bookworm; this adds what the two modules need in the sysroot.
+#
+#   emb cross /path/to/ivi-homescreen --target rpi4-bookworm --build \
+#       --backend drm-kms-egl --define BUILD_COMPOSITOR=ON \
+#       --app /path/to/ihs_godot_view/dart/ihs_godot_view/example
+#
+# Run Godot on Vulkan with the Mobile renderer:
+#
+#   IHS_GODOT_RENDERING_DRIVER=vulkan IHS_GODOT_RENDERING_METHOD=mobile
+#
+# Vulkan here is PanVK from a Mesa main build, which Bifrost GPUs only enable
+# with PAN_I_WANT_A_BROKEN_VULKAN_DRIVER=1; point VK_ICD_FILENAMES at that
+# build's panfrost_icd.*.json. Forward+ (the
+# demo's own setting) is too slow on the Mali-G52: at 1280x1440 a single
+# fragment job of the menu outlasts the panfrost kernel driver's job timeout,
+# and each reset leaves tiles undrawn. On the distro's GLES the menu draws
+# without its 3D scene. The first launch compiles pipelines for minutes;
+# Mesa's shader cache makes later launches start in seconds. See the README
+# (Boards).
+
+cross:
+  targets:
+    rpi4-bookworm:
+      sysroot:
+        dev_packages:
+          # vulkan/vulkan.h for the producer (it calls Vulkan through the
+          # shell's loader, so only the headers are needed).
+          - libvulkan-dev
+      custom_device:
+        id: rpi4-bookworm-godot
+        label: Radxa Zero 3 / Debian 12 arm64 (ihs_godot_view)

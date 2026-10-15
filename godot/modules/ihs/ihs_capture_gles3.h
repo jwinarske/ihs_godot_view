@@ -67,6 +67,7 @@ public:
 	~IhsCaptureGLES3() override;
 
 	uint32_t get_api() const override;
+	void wait_idle() override;
 	int add_target(uint32_t p_id, const IhsGodotTarget &p_target) override;
 	void remove_target(uint32_t p_id) override;
 	void remove_all_targets() override;

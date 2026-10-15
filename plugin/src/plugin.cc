@@ -170,6 +170,10 @@ void ihs_godot_view_set_listener(IhsGodotViewListener listener) {
   GodotRuntime::Get().SetListener(listener);
 }
 
+void ihs_godot_view_set_dart_port(int64_t port, void* post_cobject) {
+  GodotRuntime::Get().SetDartPort(port, post_cobject);
+}
+
 void ihs_godot_view_free_string(char* payload) {
   std::free(payload);
 }

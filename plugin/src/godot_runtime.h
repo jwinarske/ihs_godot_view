@@ -63,16 +63,20 @@ class GodotRuntime {
   [[nodiscard]] const IhsGodotApiV1* api() const { return api_.load(); }
   uint32_t NewTargetId() { return next_target_id_.fetch_add(1); }
   void SetListener(IhsGodotViewListener listener) { listener_ = listener; }
+  void SetDartPort(int64_t port, void* post_cobject);
   void Emit(int32_t view_id, IhsGodotViewEvent event, const std::string& text);
   [[nodiscard]] int32_t active_view_id() const { return active_id_.load(); }
   double ActiveDevicePixelRatio();
   void SetPaused(bool paused);
   void Shutdown();
+  // Stop the engine before the process's exit handlers run (see .cc).
+  void StopAtExit();
 
  private:
   GodotRuntime() = default;
   ~GodotRuntime();
 
+  static void OnExit(int status, void* arg);
   void ThreadMain();
   bool RunTasks(std::unique_lock<std::mutex>& lock);
   bool StartEngine(const std::shared_ptr<GodotView>& view);
@@ -89,6 +93,8 @@ class GodotRuntime {
   std::deque<std::function<void()>> tasks_;
   std::thread thread_;
   bool stop_ = false;
+  bool stopping_ = false;  // the engine thread left its loop to shut down
+  bool stopped_ = false;   // and finished
 
   std::mutex views_mutex_;
   std::map<int32_t, std::weak_ptr<GodotView>> views_;
@@ -97,6 +103,9 @@ class GodotRuntime {
   std::atomic<const IhsGodotApiV1*> api_{nullptr};
   std::atomic<uint32_t> next_target_id_{1};
   std::atomic<IhsGodotViewListener> listener_{nullptr};
+  std::mutex dart_mutex_;  // guards the pair below
+  int64_t dart_port_ = 0;
+  void* dart_post_ = nullptr;  // NativeApi.postCObject
 
   // Engine thread only.
   void* libgodot_ = nullptr;

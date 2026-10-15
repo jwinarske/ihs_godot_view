@@ -15,6 +15,7 @@
 import 'dart:async';
 import 'dart:ffi';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:ffi/ffi.dart';
 
@@ -53,7 +54,6 @@ class GodotViewEvent {
   String toString() => 'GodotViewEvent($viewId, ${type.name}, $text)';
 }
 
-typedef _ListenerNative = Void Function(Int32, Int32, Pointer<Utf8>);
 typedef _VoidNative = Void Function();
 typedef _VoidDart = void Function();
 
@@ -73,12 +73,8 @@ class GodotNative {
         'ihs_godot_view_register');
     unregister =
         _lib.lookupFunction<_VoidNative, _VoidDart>('ihs_godot_view_unregister');
-    _setListener = _lib.lookupFunction<
-        Void Function(Pointer<NativeFunction<_ListenerNative>>),
-        void Function(Pointer<NativeFunction<_ListenerNative>>)>(
-        'ihs_godot_view_set_listener');
-    _freeString = _lib.lookupFunction<Void Function(Pointer<Utf8>),
-        void Function(Pointer<Utf8>)>('ihs_godot_view_free_string');
+    _setDartPort = _lib.lookupFunction<Void Function(Int64, Pointer<Void>),
+        void Function(int, Pointer<Void>)>('ihs_godot_view_set_dart_port');
     pointer = _lib.lookupFunction<
         Void Function(Int32, Int32, Int32, Int32, Double, Double, Double,
             Double, Int32, Double, Double, Double),
@@ -98,8 +94,11 @@ class GodotNative {
     _setPaused = _lib.lookupFunction<Void Function(Int32), void Function(int)>(
         'ihs_godot_view_set_paused');
 
-    _listener = NativeCallable<_ListenerNative>.listener(_onEvent);
-    _setListener(_listener.nativeFunction);
+    // A port rather than a NativeCallable listener: the engine thread can
+    // send an event after this isolate has gone (a hot restart, the engine
+    // shutting down), which drops a port message but aborts on a listener.
+    _port = RawReceivePort(_onEvent, 'ihs_godot_view events');
+    _setDartPort(_port.sendPort.nativePort, NativeApi.postCObject.cast());
   }
 
   static GodotNative? _instance;
@@ -129,14 +128,12 @@ class GodotNative {
   }
 
   final DynamicLibrary _lib;
-  late final NativeCallable<_ListenerNative> _listener;
+  late final RawReceivePort _port;
   final _events = StreamController<GodotViewEvent>.broadcast();
 
   late final int Function() register;
   late final void Function() unregister;
-  late final void Function(Pointer<NativeFunction<_ListenerNative>>)
-      _setListener;
-  late final void Function(Pointer<Utf8>) _freeString;
+  late final void Function(int port, Pointer<Void> postCObject) _setDartPort;
   late final void Function(int viewId, int kind, int phase, int pointer,
       double x, double y, double dx, double dy, int buttons, double pressure,
       double scrollDx, double scrollDy) pointer;
@@ -151,11 +148,12 @@ class GodotNative {
   /// Every event from every view.
   Stream<GodotViewEvent> get events => _events.stream;
 
-  void _onEvent(int viewId, int type, Pointer<Utf8> payload) {
-    final text = payload == nullptr ? '' : payload.toDartString();
-    if (payload != nullptr) {
-      _freeString(payload);
+  // [view_id, event, payload] from the plugin's threads.
+  void _onEvent(Object? message) {
+    if (message is! List || message.length != 3) {
+      return;
     }
+    final [viewId as int, type as int, text as String] = message;
     final t = type >= 0 && type < GodotEventType.values.length
         ? GodotEventType.values[type]
         : GodotEventType.error;

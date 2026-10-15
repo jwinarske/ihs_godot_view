@@ -69,5 +69,12 @@ if (LIBGODOT)
         add_test(NAME pv_vk_image_gl_falls_back
                 COMMAND pv_host_smoke ${IHS_GODOT_VIEW} ${LIBGODOT}
                 ${_project} opengl3 vk_image)
+        # No ihs_godot_view_shutdown: the plugin stops Godot at process exit.
+        add_test(NAME pv_stop_at_exit
+                COMMAND pv_host_smoke ${IHS_GODOT_VIEW} ${LIBGODOT}
+                ${_project} vulkan exit)
+        set_tests_properties(pv_stop_at_exit PROPERTIES
+                PASS_REGULAR_EXPRESSION "Godot stopped at exit"
+                FAIL_REGULAR_EXPRESSION "FAILED")
     endif ()
 endif ()

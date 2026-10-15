@@ -215,6 +215,8 @@ tps-demo main menu, release builds, ETC2/ASTC pack:
 | V3D 7.1, Pi 5 (Mesa V3D) | drm-kms-vulkan | GL compatibility | dmabuf | 12 at 1280×1440 |
 | GC7000UL, i.MX 8M Plus (Vivante) | drm-kms-egl | Mobile | dmabuf | 4, 3D missing |
 | GC7000UL, i.MX 8M Plus (Vivante) | drm-kms-egl | GL compatibility | dmabuf | 1 at 1920×1080 |
+| Mali-G52, Radxa Zero 3 (Mesa main PanVK) | drm-kms-egl | Mobile | dmabuf | 4 at 1280×1440 |
+| Mali-G52, Radxa Zero 3 (Mesa 24.2 panfrost) | drm-kms-egl | GL compatibility | dmabuf, shm | 4, 3D missing |
 
 On the Pi 5 with Mesa 25.x, start the shell with
 `V3D_DEBUG=opt_compile_time` in its environment (the shell's command line,
@@ -235,6 +237,14 @@ with; put an `override.cfg` next to the `.pck`:
 
 shading/overrides/force_vertex_shading=true
 ```
+
+On the Radxa Zero 3 (RK3566), use Vulkan with the Mobile renderer
+(`IHS_GODOT_RENDERING_DRIVER=vulkan IHS_GODOT_RENDERING_METHOD=mobile`).
+Vulkan there is PanVK from a Mesa main build, which Bifrost GPUs enable only
+with `PAN_I_WANT_A_BROKEN_VULKAN_DRIVER=1`. Forward+ is too slow for the
+Mali-G52: at 1280×1440 one fragment job of the menu (the lit floor) outlasts
+the panfrost kernel driver's job timeout, the GPU is reset about every 2 s,
+and the frame is left with undrawn tiles at 1 FPS.
 
 Pipelines compile on the first launch; Mesa's shader cache makes later
 launches start in seconds. See "Limits and notes" for the Vivante results.
@@ -318,9 +328,14 @@ cmake --build build/test && ctest --test-dir build/test --output-on-failure
 * **One Godot per process.** LibGodot creates one instance and cannot set
   Godot up twice. The engine starts with the first view and outlives it: a
   disposed view (or a hot restart) detaches and the next view re-attaches to
-  the same game. Two simultaneous views of the game are refused. When the
-  game quits (`get_tree().quit()`) the app gets a `quit` event and Godot
-  cannot be started again in that process.
+  the same game, which pauses while no view is attached. Two simultaneous
+  views of the game are refused. When the game quits (`get_tree().quit()`)
+  the app gets a `quit` event and Godot cannot be started again in that
+  process. When the process exits, the
+  plugin shuts Godot down and joins its threads before the exit handlers
+  tear down the libraries under them (the driver's shader compiler, static
+  locks). An engine busy loading a scene cannot be interrupted, so after
+  2 s the process exits with `_exit()` instead, skipping those destructors.
 * **Engine patch.** Upstream, a RenderingDevice without a window runs a
   single frame in flight and skips Godot's pipeline cache, so the CPU waits
   for every GPU frame and shaders compile at each launch.
