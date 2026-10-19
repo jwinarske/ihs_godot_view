@@ -190,3 +190,16 @@ class GodotLoadException implements Exception {
   String toString() =>
       'libihs_godot_view.so could not be loaded:\n  ${attempts.join('\n  ')}';
 }
+
+/// The platform-view factory could not be registered with the shell, so no
+/// Godot view can be created.
+class GodotRegisterException implements Exception {
+  GodotRegisterException(this.code);
+
+  final int code;
+
+  @override
+  String toString() =>
+      'the Godot platform-view factory could not be registered ($code); '
+      'see the plugin log';
+}

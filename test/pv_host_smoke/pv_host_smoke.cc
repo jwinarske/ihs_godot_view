@@ -82,6 +82,8 @@ struct Mock {
   std::thread::id platform = std::this_thread::get_id();
   std::mutex mutex;
   std::deque<std::pair<IhsPvTaskFn, void*>> tasks;
+  // Posts to answer as a shell whose platform task runner is not up yet.
+  int posts_not_up = 0;
 
   IhsPvFactory factory = nullptr;
   uint32_t width = 0, height = 0;
@@ -367,6 +369,10 @@ int SubmitLayers(void*, IhsPlatformView*, const IhsLayer* layers, size_t count,
 
 int PostTask(void*, IhsPvTaskFn fn, void* data) {
   std::lock_guard<std::mutex> lock(g.mutex);
+  if (g.posts_not_up > 0) {
+    --g.posts_not_up;
+    return IHS_PV_ERR_NO_BACKEND;
+  }
   g.tasks.emplace_back(fn, data);
   return IHS_PV_OK;
 }
@@ -447,6 +453,15 @@ int main(int argc, char** argv) {
   auto post = SYM(ihs_godot_view_post_message);
 #undef SYM
   set_listener(OnEvent);
+  // Dart registers from the UI thread, which can run before the shell has
+  // its platform task runner: posting says it is not up. The plugin waits
+  // for it rather than failing.
+  g.posts_not_up = 3;
+  int off_thread = -1;
+  std::thread([&] { off_thread = reg(); }).join();
+  RunTasks();
+  Check(off_thread == 0 && g.posts_not_up == 0 && g.factory != nullptr,
+        "registered from another thread once the runner was up");
   Check(reg() == 0 && g.factory != nullptr, "factory registered");
 
   // creationParams as the Dart widget sends them.
