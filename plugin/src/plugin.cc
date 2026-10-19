@@ -16,11 +16,13 @@
 
 // The ihs_pv factory and the Dart FFI entry points.
 
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <thread>
 
 #include <ihs/platform_view.h>
 #include <ihs_godot/bridge.h>
@@ -150,11 +152,26 @@ int32_t ihs_godot_view_register(void) {
     RegisterOnPlatform(nullptr);
     return 0;
   }
-  if (ihs_pv_post_platform_task != nullptr &&
-      ihs_pv_post_platform_task(&RegisterOnPlatform, nullptr) == IHS_PV_OK) {
+  if (ihs_pv_post_platform_task == nullptr) {
+    LOG_E("cannot reach the platform thread to register the factory");
+    return -1;
+  }
+  // The shell installs its platform-view host before the engine runs, but
+  // hands it the platform task runner only once the engine is running, and
+  // the first build -- which calls this -- can land in between. Posting then
+  // fails as the runner not being up, and a moment later it is.
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(1);
+  int rc = IHS_PV_ERR_NO_BACKEND;
+  while ((rc = ihs_pv_post_platform_task(&RegisterOnPlatform, nullptr)) ==
+             IHS_PV_ERR_NO_BACKEND &&
+         std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  if (rc == IHS_PV_OK) {
     return 0;
   }
-  LOG_E("cannot reach the platform thread to register the factory");
+  LOG_E("cannot reach the platform thread to register the factory (%d)", rc);
   return -1;
 }
 

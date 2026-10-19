@@ -80,7 +80,8 @@ typedef void (*IhsGodotViewListener)(int32_t view_id,
                                      char* payload);
 
 /* Install the platform-view factory. Platform thread (it posts itself there
- * when called from elsewhere and a host is installed). Returns 0 on success. */
+ * when called from elsewhere and a host is installed, waiting up to a second
+ * for the shell's platform task runner to come up). Returns 0 on success. */
 IHS_GODOT_VIEW_EXPORT int32_t ihs_godot_view_register(void);
 IHS_GODOT_VIEW_EXPORT void ihs_godot_view_unregister(void);
 

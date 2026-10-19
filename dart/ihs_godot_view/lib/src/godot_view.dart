@@ -101,8 +101,12 @@ class _GodotViewState extends State<GodotView> {
       _native = GodotNative.instance;
       if (!_registered) {
         // A hot restart keeps the native side registered; registering again
-        // just replaces the factory.
-        _native!.register();
+        // just replaces the factory. A failure is left unlatched, so the next
+        // view tries again.
+        final int rc = _native!.register();
+        if (rc != 0) {
+          throw GodotRegisterException(rc);
+        }
         _registered = true;
       }
     } on Object catch (e) {
