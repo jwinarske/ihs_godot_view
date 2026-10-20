@@ -205,13 +205,16 @@ GPU-bound on an iGPU; use Mobile there as on the Pi.
 
 ### Boards
 
-tps-demo main menu, release builds, ETC2/ASTC pack:
+tps-demo main menu, release builds, ETC2/ASTC pack. FPS is the median of
+20 s of `--print-fps` after a 45 s warm-up; the Adreno and V3D rows were
+measured on ivi-homescreen v3.0 (7cd6c4d7 on the Pi, 87b1a010 on the
+SA8155P) with this repository's main.
 
 | GPU (driver) | Backend | Renderer | Surfaces granted | FPS |
 | --- | --- | --- | --- | --- |
-| Adreno 640 (Qualcomm) | drm-kms-vulkan | Mobile | dmabuf, vk_image, shm | 60 (vsync; shm 43–46) |
-| Adreno 640 (Qualcomm) | drm-kms-egl | Mobile | dmabuf, plane, egl_image | 45 |
-| V3D 7.1, Pi 5 (Mesa V3DV) | drm-kms-vulkan | Mobile, vertex shading | dmabuf, vk_image, shm | 27 at 1280×1440 |
+| Adreno 640 (Qualcomm) | drm-kms-vulkan | Mobile | dmabuf, vk_image, shm | 60 (vsync; shm 46) |
+| Adreno 640 (Qualcomm) | drm-kms-egl | Mobile | dmabuf, plane, egl_image | 60 (vsync) |
+| V3D 7.1, Pi 5 (Mesa V3DV) | drm-kms-vulkan | Mobile, vertex shading | dmabuf, vk_image, shm | 28 at 1280×1440 (shm 24) |
 | V3D 7.1, Pi 5 (Mesa V3D) | drm-kms-vulkan | GL compatibility | dmabuf | 12 at 1280×1440 |
 | GC7000UL, i.MX 8M Plus (Vivante) | drm-kms-egl | Mobile | dmabuf | 4, 3D missing |
 | GC7000UL, i.MX 8M Plus (Vivante) | drm-kms-egl | GL compatibility | dmabuf | 1 at 1920×1080 |
