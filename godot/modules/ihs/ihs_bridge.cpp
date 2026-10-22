@@ -13,6 +13,7 @@
 #include "core/config/engine.h"
 #include "core/extension/godot_instance.h"
 #include "core/extension/libgodot.h"
+#include "core/io/resource_loader.h"
 
 #include <unistd.h>
 #include <cstddef>
@@ -345,6 +346,10 @@ void _post_message(const char *p_utf8) {
 	IhsState::get().push_message(p_utf8);
 }
 
+int _loads_in_progress() {
+	return ResourceLoader::has_threaded_loads_in_progress() ? 1 : 0;
+}
+
 const IhsGodotApiV1 api = {
 	sizeof(IhsGodotApiV1),
 	IHS_GODOT_BRIDGE_VERSION,
@@ -370,6 +375,7 @@ const IhsGodotApiV1 api = {
 	_joy_button,
 	_joy_axis,
 	_post_message,
+	_loads_in_progress,
 };
 
 } // namespace
