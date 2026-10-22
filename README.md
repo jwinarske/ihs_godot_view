@@ -241,6 +241,15 @@ with; put an `override.cfg` next to the `.pck`:
 shading/overrides/force_vertex_shading=true
 ```
 
+The Pi 5's V3DV leaves room for only one custom varying per spatial shader:
+Godot reserves varying locations 0-14 for built-ins, and V3DV reports 16.
+Two of the tps-demo level's shaders declare two, fail with "Too many
+varyings used in shader (17 used, maximum supported is 16)", and the red
+robot's shield and sparks go undrawn. Export the pack with
+[`patches/tps-demo/0001-one-custom-varying-per-red-robot-shader.patch`](patches/tps-demo/0001-one-custom-varying-per-red-robot-shader.patch)
+applied (`patch -p1` in the tps-demo checkout); it packs each shader's
+varyings into one and leaves the output unchanged.
+
 On the Radxa Zero 3 (RK3566), use Vulkan with the Mobile renderer
 (`IHS_GODOT_RENDERING_DRIVER=vulkan IHS_GODOT_RENDERING_METHOD=mobile`).
 Vulkan there is PanVK from a Mesa main build, which Bifrost GPUs enable only
