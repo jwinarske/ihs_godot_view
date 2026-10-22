@@ -10,6 +10,8 @@ has_threaded_loads_in_progress() lets an embedder that is about to shut
 the engine down because its process is exiting tell that case apart, and
 leave without the cleanup instead.
 
+Upstream issue: godotengine/godot#124796
+
 Applied by godot/CMakeLists.txt on top of GODOT_GIT_REF, after 0002.
 
 --- a/core/io/resource_loader.cpp

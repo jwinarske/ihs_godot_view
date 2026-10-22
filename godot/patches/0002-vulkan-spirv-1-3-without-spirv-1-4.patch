@@ -14,6 +14,8 @@ VK_KHR_spirv_1_4 itself, so it is unaffected. The shader cache key now
 includes the SPIR-V version, so binaries cached at the other version are
 not loaded.
 
+Upstream issue: godotengine/godot#124794
+
 Applied by godot/CMakeLists.txt on top of GODOT_GIT_REF, after 0001.
 
 --- a/drivers/vulkan/rendering_device_driver_vulkan.cpp
