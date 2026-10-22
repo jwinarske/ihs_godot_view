@@ -348,6 +348,13 @@ cmake --build build/test && ctest --test-dir build/test --output-on-failure
   tear down the libraries under them (the driver's shader compiler, static
   locks). An engine busy loading a scene cannot be interrupted, so after
   2 s the process exits with `_exit()` instead, skipping those destructors.
+* **SPIR-V 1.3 on Vulkan 1.1.** Upstream compiles every shader to SPIR-V
+  1.4, which a Vulkan 1.1 device accepts only with `VK_KHR_spirv_1_4`, and
+  does not enable that extension; under the validation layer every shader
+  module is then invalid. `godot/patches/0002-vulkan-spirv-1-3-without-spirv-1-4.patch`
+  enables the extension when the device offers it and otherwise compiles
+  for SPIR-V 1.3. The shader cache is keyed on the version, so shaders
+  cached before the patch are compiled again on first launch.
 * **Engine patch.** Upstream, a RenderingDevice without a window runs a
   single frame in flight and skips Godot's pipeline cache, so the CPU waits
   for every GPU frame and shaders compile at each launch.
