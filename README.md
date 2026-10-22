@@ -348,6 +348,12 @@ cmake --build build/test && ctest --test-dir build/test --output-on-failure
   tear down the libraries under them (the driver's shader compiler, static
   locks). An engine busy loading a scene cannot be interrupted, so after
   2 s the process exits with `_exit()` instead, skipping those destructors.
+  It does the same when a resource is still loading in the background
+  (`load_threaded_request`): Godot's cleanup frees the load tasks under the
+  worker still writing to one
+  (`godot/patches/0003-resource-loader-threaded-loads-in-progress.patch`
+  lets the module tell). That exit skips Godot's own saves, such as the
+  pipeline cache.
 * **SPIR-V 1.3 on Vulkan 1.1.** Upstream compiles every shader to SPIR-V
   1.4, which a Vulkan 1.1 device accepts only with `VK_KHR_spirv_1_4`, and
   does not enable that extension; under the validation layer every shader

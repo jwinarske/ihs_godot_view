@@ -1,0 +1,43 @@
+ResourceLoader: report whether threaded loads are in progress
+
+clear_thread_load_tasks(), run from Main::cleanup(), frees the thread
+load tasks once none reports THREAD_LOAD_IN_PROGRESS, but a worker can
+still be inside the loader writing to a task (its progress) at that
+point: a heap-use-after-free that ASan shows when the engine is shut
+down while a scene is loading in the background.
+
+has_threaded_loads_in_progress() lets an embedder that is about to shut
+the engine down because its process is exiting tell that case apart, and
+leave without the cleanup instead.
+
+Applied by godot/CMakeLists.txt on top of GODOT_GIT_REF, after 0002.
+
+--- a/core/io/resource_loader.cpp
++++ b/core/io/resource_loader.cpp
+@@ -1714,6 +1714,16 @@
+ 	return cleaning_tasks;
+ }
+ 
++bool ResourceLoader::has_threaded_loads_in_progress() {
++	MutexLock lock(thread_load_mutex);
++	for (const KeyValue<String, ThreadLoadTask> &E : thread_load_tasks) {
++		if (E.value.status == THREAD_LOAD_IN_PROGRESS) {
++			return true;
++		}
++	}
++	return false;
++}
++
+ Vector<String> ResourceLoader::list_directory(const String &p_directory) {
+ 	RBSet<String> files_found;
+ 	Ref<DirAccess> dir = DirAccess::open(p_directory);
+--- a/core/io/resource_loader.h
++++ b/core/io/resource_loader.h
+@@ -318,6 +318,7 @@
+ 	static Ref<Resource> get_resource_ref_override(const String &p_path);
+ 
+ 	static bool is_cleaning_tasks();
++	static bool has_threaded_loads_in_progress();
+ 
+ 	static Vector<String> list_directory(const String &p_directory);
+ 

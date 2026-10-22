@@ -95,6 +95,8 @@ class GodotRuntime {
   bool stop_ = false;
   bool stopping_ = false;  // the engine thread left its loop to shut down
   bool stopped_ = false;   // and finished
+  bool exiting_ = false;   // the stop is the process exiting (OnExit)
+  bool abandoned_ = false;  // so the engine was left loading, not destroyed
 
   std::mutex views_mutex_;
   std::map<int32_t, std::weak_ptr<GodotView>> views_;

@@ -384,6 +384,14 @@ typedef struct IhsGodotApiV1 {
 
   /* Emit IhsHost.message_received(text) in GDScript. */
   void (*post_message)(const char* utf8);
+
+  /* --- shutdown (any thread; appended, so check struct_size) --- */
+
+  /* 1 while a resource is loading in the background, else 0. Godot's cleanup
+   * frees the load tasks under a worker that may still be writing to one, so
+   * a host shutting down because its process is exiting should leave without
+   * destroy_instance() then. */
+  int (*loads_in_progress)(void);
 } IhsGodotApiV1;
 
 typedef const IhsGodotApiV1* (*IhsGodotBridgeGetApiFn)(uint32_t version);

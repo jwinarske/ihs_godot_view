@@ -20,6 +20,7 @@
 #include <pthread.h>
 #include <unistd.h>
 
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -44,6 +45,14 @@ constexpr auto kExitBusyTimeout = std::chrono::seconds(2);
 constexpr auto kDetachTimeout = std::chrono::seconds(5);
 constexpr auto kExitTimeout = std::chrono::seconds(10);
 constexpr auto kDefaultPeriod = std::chrono::microseconds(16667);
+
+// A module built before loads_in_progress was appended reports no loads.
+bool LoadsInProgress(const IhsGodotApiV1& api) {
+  constexpr size_t kNeeded = offsetof(IhsGodotApiV1, loads_in_progress) +
+                             sizeof(IhsGodotApiV1::loads_in_progress);
+  return api.struct_size >= kNeeded && api.loads_in_progress != nullptr &&
+         api.loads_in_progress() != 0;
+}
 
 // The part of Dart's dart_native_api.h that Emit uses: a Dart_CObject is a
 // type tag and a union, and Dart_PostCObject copies it into a message. The
@@ -271,6 +280,7 @@ void GodotRuntime::OnExit(int status, void* /*arg*/) {
     return;  // never started, already joined, or exit() from the engine thread
   }
   self.stop_ = true;
+  self.exiting_ = true;
   self.cv_.notify_all();
   // An iteration that loads a scene or compiles shaders can run for minutes
   // and cannot be interrupted. Leave without the destructors rather than wait
@@ -282,6 +292,8 @@ void GodotRuntime::OnExit(int status, void* /*arg*/) {
   } else if (!self.cv_.wait_for(lock, kExitTimeout,
                                 [&self] { return self.stopped_; })) {
     why = "did not finish shutting down";
+  } else if (self.abandoned_) {
+    why = "is loading in the background";
   }
   if (why != nullptr) {
     LOG_W("Godot %s; exiting without shutting it down", why);
@@ -332,6 +344,7 @@ void GodotRuntime::ThreadMain() {
     lock.lock();
   }
   stopping_ = true;
+  const bool exiting = exiting_;
   lock.unlock();
   cv_.notify_all();
 
@@ -340,15 +353,25 @@ void GodotRuntime::ThreadMain() {
     active_->Teardown();
     active_.reset();
   }
+  bool abandoned = false;
   if (const IhsGodotApiV1* api = api_.exchange(nullptr);
       api != nullptr && instance_ != nullptr) {
-    api->destroy_instance(instance_);
+    // Godot's cleanup frees the background load tasks under a worker that may
+    // still be writing to one. A process that is exiting gives up only the
+    // cleanup's saves (the pipeline cache) by leaving the engine as it is;
+    // OnExit then _exit()s.
+    if (exiting && LoadsInProgress(*api)) {
+      abandoned = true;
+    } else {
+      api->destroy_instance(instance_);
+    }
   }
   instance_ = nullptr;
   engine_dead_ = true;
 
   lock.lock();
   stopped_ = true;
+  abandoned_ = abandoned;
   lock.unlock();
   cv_.notify_all();
 }
