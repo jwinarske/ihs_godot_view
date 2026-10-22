@@ -1,0 +1,73 @@
+tps-demo: use one custom varying per red-robot shader
+
+Godot's Mobile and Forward+ renderers reserve varying locations 0-14 for
+built-ins and place custom varyings from location 15. The shader
+validator allows MIN(maxVertexOutputComponents,
+maxFragmentInputComponents) / 4 locations, which is 16 on a Raspberry
+Pi 5 (Mesa V3DV reports 64 components), so a spatial shader there may
+declare only one custom varying. Two shaders in the level declare two
+and fail with "Too many varyings used in shader (17 used, maximum
+supported is 16)", leaving the red robot's electric shield and the
+spark particles undrawn:
+
+- SparkShader.gdshader: pack the lifetime percent and instance id into
+  one vec2;
+- EvilRobo.tres: pass the per-vertex random offset through COLOR, which
+  has a built-in location and is otherwise unused by that shader.
+
+The output is unchanged. Applies to godotengine/tps-demo a82f154 and to
+the fluorite-game fork.
+
+--- a/enemies/red_robot/parts/sparks_effect/SparkShader.gdshader
++++ b/enemies/red_robot/parts/sparks_effect/SparkShader.gdshader
+@@ -3,17 +3,18 @@
+ uniform sampler2D alpha_texture;
+ uniform float emission_factor = 3.0;
+ 
+-varying float lifetime_percent;
+-varying float id;
++// x: lifetime percent, y: instance id. One varying rather than two: the
++// Mobile renderer leaves room for a single custom varying on GPUs with 16
++// varying slots (Raspberry Pi 5's V3D).
++varying vec2 lifetime_id;
+ 
+ void vertex() {
+-	id = float(INSTANCE_ID);
+-	lifetime_percent = INSTANCE_CUSTOM.y;
++	lifetime_id = vec2(INSTANCE_CUSTOM.y, float(INSTANCE_ID));
+ }
+ 
+ void fragment() {
+ 	float alpha_from_texture = texture(alpha_texture, UV).r;
+-	float alpha_travel_factor = (UV.y + lifetime_percent + id) * 3.14;
++	float alpha_travel_factor = (UV.y + lifetime_id.x + lifetime_id.y) * 3.14;
+ 	ALPHA = sin(alpha_travel_factor * 3.0) * sign(sin(alpha_travel_factor * 0.1)) * COLOR.a * alpha_from_texture;
+ 	ALPHA = sin(alpha_travel_factor * 3.0) * sign(sin(alpha_travel_factor * 0.1)) * COLOR.a * alpha_from_texture;
+ 	ALPHA = max(ALPHA, 0.0);
+--- a/enemies/red_robot/parts/EvilRobo.tres
++++ b/enemies/red_robot/parts/EvilRobo.tres
+@@ -16,7 +16,9 @@
+ uniform float emission_cutout = 0.0;
+ 
+ varying vec3 vertex_local_coords;
+-varying vec3 vert_random;
++// The per-vertex random offset rides in COLOR, which has a built-in slot and
++// is otherwise unused here: the Mobile renderer leaves room for a single
++// custom varying on GPUs with 16 varying slots (Raspberry Pi 5's V3D).
+ 
+ // CODE FROM Nikita Miropolskiy
+ // https://www.shadertoy.com/view/XsX3zB
+@@ -87,11 +89,11 @@
+ void vertex(){
+ 	VERTEX += NORMAL * grow_factor;
+ 	vertex_local_coords = VERTEX;
+-	vert_random = random3(VERTEX);
++	COLOR = vec4(random3(VERTEX), 1.0);
+ }
+ 
+ void fragment(){
+-	float noise1 = simplex3d(vertex_local_coords + vec3(0.0,TIME * speed_scale,0.0) + vert_random);
++	float noise1 = simplex3d(vertex_local_coords + vec3(0.0,TIME * speed_scale,0.0) + COLOR.rgb);
+ 	float noise2 = simplex3d(vertex_local_coords * 0.6 + vec3(0.0,-TIME * speed_scale,0.0));
+ 	// we take the intersection of the 2 noises by multiplying them
+ 	// and max it between 0.0 and 0.001 using smoothstep
