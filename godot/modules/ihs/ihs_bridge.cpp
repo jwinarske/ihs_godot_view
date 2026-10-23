@@ -8,6 +8,7 @@
 // include/ihs_godot/bridge.h for the contract.
 
 #include "display_server_ihs.h"
+#include "ihs_logger.h"
 #include "ihs_state.h"
 
 #include "core/config/engine.h"
@@ -67,6 +68,9 @@ int _configure(const IhsGodotConfig *p_config, const IhsGodotHostCallbacks *p_ca
 		memcpy(&state.callbacks, p_callbacks, n);
 		state.callbacks.struct_size = sizeof(IhsGodotHostCallbacks);
 	}
+	// From here on, even before the engine exists, what Godot would write to
+	// stdout or stderr goes to the host.
+	set_stdio_print_func(state.callbacks.engine_log ? &IhsLogger::stdio_print : nullptr);
 	DisplayServerIhs::register_ihs_driver();
 	state.configured = true;
 	return IHS_GODOT_OK;

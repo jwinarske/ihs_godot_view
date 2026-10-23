@@ -27,12 +27,19 @@ enum class LogLevel { kError = 0, kWarning = 1, kInfo = 2, kDebug = 3 };
 // diagnostics and Godot's own output).
 enum class LogChannel { kPlugin = 0, kGodot = 1 };
 
-// Takes a finished line; returns false when it could not take it (no logging
-// service yet), and the line then goes to stderr.
-using LogSink = bool (*)(LogChannel channel,
-                         LogLevel level,
-                         const char* text,
-                         size_t len);
+// Where lines go instead of stderr: the host's logging service.
+//   write    takes a finished line; returns false when it could not take it
+//            (no service yet), and the line then goes to stderr.
+//   running  whether the service still takes lines.
+//   flush    writes out the lines the service holds.
+struct LogSink {
+  bool (*write)(LogChannel channel,
+                LogLevel level,
+                const char* text,
+                size_t len);
+  bool (*running)();
+  void (*flush)();
+};
 
 // Logging with a fixed prefix, to the installed sink or else stderr. The
 // level floor comes from IHS_GODOT_VIEW_LOG (error|warning|info|debug,
@@ -43,12 +50,18 @@ void Log(LogLevel level, const char* fmt, ...)
 // A line from libgodot, verbatim.
 void LogGodot(LogLevel level, const char* text);
 
-// Installs the sink (nullptr removes it). Any thread.
-void SetLogSink(LogSink sink) noexcept;
+// Installs the sink (nullptr removes it). @sink must outlive its use. Any
+// thread.
+void SetLogSink(const LogSink* sink) noexcept;
 
-// From now on, stderr only: the host process is exiting, and the sink's
-// service may already be gone.
-void LogToStderrOnly();
+// The host process is exiting. If the sink's service has already stopped
+// (a shell that stops it before returning from main), lines go to stderr
+// from now on.
+void LogProcessExiting();
+
+// Writes out what the sink holds, before a _exit() that skips the service's
+// own exit handler.
+void LogFlush();
 
 }  // namespace ihs_godot
 

@@ -101,6 +101,19 @@ void IhsLogger::log_error(const char *p_function, const char *p_file, int p_line
 	}
 }
 
+void IhsLogger::stdio_print(const char *p_text, StdioPrintType p_type) {
+	if (!p_text) {
+		return;
+	}
+	int level = IHS_GODOT_LOG_INFO;
+	if (p_type == STDIO_PRINT_ERROR) {
+		level = IHS_GODOT_LOG_ERROR;
+	} else if (p_type == STDIO_PRINT_WARNING) {
+		level = IHS_GODOT_LOG_WARNING;
+	}
+	emit_lines(level, p_text);
+}
+
 void IhsLogger::install_if_requested() {
 	OS *os = OS::get_singleton();
 	if (!os || !IhsState::get().callbacks.engine_log) {
