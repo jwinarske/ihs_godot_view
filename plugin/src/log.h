@@ -17,15 +17,38 @@
 #pragma once
 
 #include <cstdarg>
+#include <cstddef>
 
 namespace ihs_godot {
 
 enum class LogLevel { kError = 0, kWarning = 1, kInfo = 2, kDebug = 3 };
 
-// stderr logging with a fixed prefix. The level floor comes from
-// IHS_GODOT_VIEW_LOG (error|warning|info|debug, default info).
+// Where a line comes from: the plugin itself, or libgodot (the ihs module's
+// diagnostics and Godot's own output).
+enum class LogChannel { kPlugin = 0, kGodot = 1 };
+
+// Takes a finished line; returns false when it could not take it (no logging
+// service yet), and the line then goes to stderr.
+using LogSink = bool (*)(LogChannel channel,
+                         LogLevel level,
+                         const char* text,
+                         size_t len);
+
+// Logging with a fixed prefix, to the installed sink or else stderr. The
+// level floor comes from IHS_GODOT_VIEW_LOG (error|warning|info|debug,
+// default info).
 void Log(LogLevel level, const char* fmt, ...)
     __attribute__((format(printf, 2, 3)));
+
+// A line from libgodot, verbatim.
+void LogGodot(LogLevel level, const char* text);
+
+// Installs the sink (nullptr removes it). Any thread.
+void SetLogSink(LogSink sink) noexcept;
+
+// From now on, stderr only: the host process is exiting, and the sink's
+// service may already be gone.
+void LogToStderrOnly();
 
 }  // namespace ihs_godot
 

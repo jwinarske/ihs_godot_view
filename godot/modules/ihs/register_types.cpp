@@ -7,11 +7,12 @@
 #include "register_types.h"
 
 #include "ihs_host.h"
-
-#include <ihs_godot/bridge.h>
+#include "ihs_logger.h"
 
 #include "core/config/engine.h"
 #include "core/object/class_db.h"
+
+#include <ihs_godot/bridge.h>
 
 // The display server is not registered here: Main::setup() validates
 // --display-driver before any module is initialized, so registration happens
@@ -28,6 +29,11 @@ extern "C" __attribute__((used, visibility("default"))) const void *ihs_godot_br
 static IhsHost *ihs_host = nullptr;
 
 void initialize_ihs_module(ModuleInitializationLevel p_level) {
+	if (p_level == MODULE_INITIALIZATION_LEVEL_CORE) {
+		// Before Main adds the project's file logger, so that one is kept.
+		IhsLogger::install_if_requested();
+		return;
+	}
 	if (p_level != MODULE_INITIALIZATION_LEVEL_SCENE) {
 		return;
 	}

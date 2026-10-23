@@ -273,6 +273,9 @@ void GodotRuntime::StopAtExit() {
 }
 
 void GodotRuntime::OnExit(int status, void* /*arg*/) {
+  // The shell stops its logging service before it returns from main, so
+  // whatever is logged from here on goes to stderr.
+  LogToStderrOnly();
   GodotRuntime& self = Get();
   std::unique_lock<std::mutex> lock(self.mutex_);
   if (!self.thread_.joinable() ||
@@ -490,6 +493,8 @@ bool GodotRuntime::StartEngine(const std::shared_ptr<GodotView>& view) {
   callbacks.log = &GodotRuntime::OnLog;
   callbacks.message = &GodotRuntime::OnMessage;
   callbacks.mouse_mode = &GodotRuntime::OnMouseMode;
+  // Godot's own output, through the same path as the module's lines.
+  callbacks.engine_log = &GodotRuntime::OnLog;
   if (api->configure(&config, &callbacks) != IHS_GODOT_OK) {
     return false;
   }
@@ -533,8 +538,7 @@ bool GodotRuntime::StartEngine(const std::shared_ptr<GodotView>& view) {
 }
 
 void GodotRuntime::OnLog(void* /*user_data*/, int level, const char* text) {
-  Log(static_cast<LogLevel>(level < 0 ? 0 : level > 3 ? 3 : level),
-      "godot: %s", text);
+  LogGodot(static_cast<LogLevel>(level < 0 ? 0 : level > 3 ? 3 : level), text);
 }
 
 void GodotRuntime::OnMessage(void* user_data, const char* text) {

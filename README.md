@@ -305,6 +305,26 @@ environment, which is convenient on a target:
 | `IHS_GODOT_VIEW_LIB` | Dart side: path to `libihs_godot_view.so` |
 | `IHS_GODOT_VIEW_LOG` | `error`, `warning`, `info` (default), `debug` |
 
+### Logging
+
+The plugin logs through the shell's logging service (ivi-homescreen's
+`ihs_shared`), so its lines go wherever `IHS_LOG_SINK` sends the shell's
+(`console`, `file`, `dlt`) and `IHS_LOG_LEVEL` filters them too. There are two
+contexts:
+
+* `GDVW`: the plugin.
+* `GODT`: libgodot. That covers the ihs module's diagnostics and Godot's own
+  output (`print`, `printerr`, errors and warnings), one record per line.
+  Godot's terminal output is replaced, and a log file enabled in the project
+  (`debug/file_logging/enable_file_logging`) is still written.
+
+`IHS_GODOT_VIEW_LOG` is a floor applied before either. Lines go to stderr
+instead (prefixed `[ihs_godot_view]`) in three cases: before the shell has
+started its logging, once the process is exiting (the shell stops the service
+before it returns from `main`), and when the shell has no logging service. A
+few messages from Godot's start-up and final cleanup bypass its loggers and
+are always written to stderr by Godot itself.
+
 ## Tests
 
 * `plugin/test`: unit tests for creation-param decoding, touch decoding and
