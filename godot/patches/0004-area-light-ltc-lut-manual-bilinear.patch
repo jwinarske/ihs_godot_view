@@ -1,0 +1,76 @@
+Area lights: filter the LTC lookup tables in the shader
+
+The LTC LUTs are uploaded as R32G32B32A32_SFLOAT and read through
+SAMPLER_LINEAR_CLAMP, but linear filtering of that format is optional
+in Vulkan. On a device without it, the validation layer reports
+VUID-vkCmdDrawIndexed-magFilter-04553 for every scene draw (the LUTs
+are bound in the scene uniform set whether or not an area light is
+present), and the filtered result is undefined.
+
+Fetch the four texels and interpolate them in the shader instead, with
+a nearest sampler. On a device that does filter the format, renders of
+an AreaLight3D scene before and after differ by at most 7/255 in 20 of
+1.4M pixels (Mobile) and 1/255 (Forward+).
+
+Converting the LUTs to half floats, which always support linear
+filtering, is not an option: low-roughness grazing-angle texels hold
+values below the half-float normal range, which Godot's conversion
+flushes to zero, so 1/z in the inverse LTC matrix becomes infinite.
+
+Applied by godot/CMakeLists.txt on top of GODOT_GIT_REF, after 0003.
+
+--- a/servers/rendering/renderer_rd/shaders/area_lights_inc.glsl
++++ b/servers/rendering/renderer_rd/shaders/area_lights_inc.glsl
+@@ -322,13 +322,30 @@ void ltc_evaluate(vec3 normal, vec3 eye_vec, mat3 M_inv, vec3 points[4], vec4 te
+ 	integral = I / (2.0 * M_PI);
+ }
+ 
++// Bilinear lookup done by hand: the LUTs are 32-bit float, and linear filtering
++// of R32G32B32A32_SFLOAT is optional in Vulkan. lut_sampler is only used for
++// the fetches, so a nearest sampler is passed.
++vec4 ltc_lut_bilinear(texture2D lut, sampler lut_sampler, vec2 uv) {
++	const int LTC_LUT_LAST = 63;
++	vec2 pos = uv * vec2(float(LTC_LUT_LAST + 1)) - vec2(0.5);
++	vec2 base = floor(pos);
++	vec2 f = pos - base;
++	ivec2 i0 = clamp(ivec2(base), ivec2(0), ivec2(LTC_LUT_LAST));
++	ivec2 i1 = clamp(ivec2(base) + ivec2(1), ivec2(0), ivec2(LTC_LUT_LAST));
++	vec4 t00 = texelFetch(sampler2D(lut, lut_sampler), i0, 0);
++	vec4 t10 = texelFetch(sampler2D(lut, lut_sampler), ivec2(i1.x, i0.y), 0);
++	vec4 t01 = texelFetch(sampler2D(lut, lut_sampler), ivec2(i0.x, i1.y), 0);
++	vec4 t11 = texelFetch(sampler2D(lut, lut_sampler), i1, 0);
++	return mix(mix(t00, t10, f.x), mix(t01, t11, f.x), f.y);
++}
++
+ void ltc_evaluate_specular(vec3 normal, vec3 eye_vec, float roughness, vec3 points[4], vec4 texture_rect, float max_mipmap, texture2D area_light_atlas, sampler texture_sampler, sampler lut_sampler, texture2D ltc_lut1, texture2D ltc_lut2, out float ltc_specular, out vec2 fresnel, out vec3 ltc_specular_tex_color) {
+ 	float theta = acos_approx(dot(normal, eye_vec));
+ 	const float LTC_LUT_SIZE = float(64.0);
+ 	vec2 lut_pos = vec2(max(roughness, float(0.02)), theta / float(0.5 * M_PI));
+ 	vec2 lut_uv = vec2(lut_pos * (float(63.0) / LTC_LUT_SIZE) + vec2(float(0.5) / LTC_LUT_SIZE)); // offset by 1 pixel
+-	vec4 M_brdf_abcd = texture(sampler2D(ltc_lut1, lut_sampler), lut_uv);
+-	vec3 M_brdf_e_mag_fres = texture(sampler2D(ltc_lut2, lut_sampler), lut_uv).xyz;
++	vec4 M_brdf_abcd = ltc_lut_bilinear(ltc_lut1, lut_sampler, lut_uv);
++	vec3 M_brdf_e_mag_fres = ltc_lut_bilinear(ltc_lut2, lut_sampler, lut_uv).xyz;
+ 	float scale = 1.0 / (M_brdf_abcd.x * M_brdf_e_mag_fres.x - M_brdf_abcd.y * M_brdf_abcd.w);
+ 
+ 	mat3 M_inv = mat3(
+--- a/servers/rendering/renderer_rd/shaders/scene_forward_lights_inc.glsl
++++ b/servers/rendering/renderer_rd/shaders/scene_forward_lights_inc.glsl
+@@ -1144,7 +1144,7 @@ void light_process_area(uint idx, vec3 vertex, hvec3 eye_vec, hvec3 normal, vec3
+ 	ltc_evaluate(vec3(normal), vec3(eye_vec), mat3(1), points, area_lights.data[idx].projector_rect, max_mipmap, area_light_atlas, SAMPLER_LINEAR_WITH_MIPMAPS_CLAMP, ltc_diffuse, ltc_diffuse_tex_color);
+ 
+ #if !defined(SPECULAR_DISABLED) || (defined(LIGHT_CODE_USED) && defined(AREA_LIGHT_CODE_USED))
+-	ltc_evaluate_specular(vec3(normal), vec3(eye_vec), roughness, points, area_lights.data[idx].projector_rect, max_mipmap, area_light_atlas, SAMPLER_LINEAR_WITH_MIPMAPS_CLAMP, SAMPLER_LINEAR_CLAMP, ltc_lut1, ltc_lut2, ltc_specular, ltc_fresnel, ltc_specular_tex_color);
++	ltc_evaluate_specular(vec3(normal), vec3(eye_vec), roughness, points, area_lights.data[idx].projector_rect, max_mipmap, area_light_atlas, SAMPLER_LINEAR_WITH_MIPMAPS_CLAMP, SAMPLER_NEAREST_CLAMP, ltc_lut1, ltc_lut2, ltc_specular, ltc_fresnel, ltc_specular_tex_color);
+ 	half f90 = clamp(dot(f0, hvec3(50.0 * 0.33)), metallic, half(1.0));
+ 	fresnel_color = f0 * max(half(ltc_fresnel.x), half(0.0)) + (f90 - f0) * max(half(ltc_fresnel.y), half(0.0));
+ #endif
+@@ -1264,7 +1264,7 @@ void light_process_area(uint idx, vec3 vertex, hvec3 eye_vec, hvec3 normal, vec3
+ 	vec3 cc_specular_tex_color = vec3(1.0);
+ 	float cc_specular_ltc = 0.0;
+ 	vec2 cc_fresnel;
+-	ltc_evaluate_specular(vec3(vertex_normal), vec3(eye_vec), sqrt(mix(0.001, 0.1, float(clearcoat_roughness))), points, area_lights.data[idx].projector_rect, max_mipmap, area_light_atlas, SAMPLER_LINEAR_WITH_MIPMAPS_CLAMP, SAMPLER_LINEAR_CLAMP, ltc_lut1, ltc_lut2, cc_specular_ltc, cc_fresnel, cc_specular_tex_color);
++	ltc_evaluate_specular(vec3(vertex_normal), vec3(eye_vec), sqrt(mix(0.001, 0.1, float(clearcoat_roughness))), points, area_lights.data[idx].projector_rect, max_mipmap, area_light_atlas, SAMPLER_LINEAR_WITH_MIPMAPS_CLAMP, SAMPLER_NEAREST_CLAMP, ltc_lut1, ltc_lut2, cc_specular_ltc, cc_fresnel, cc_specular_tex_color);
+ 	half Fr = (half(0.04) * max(half(cc_fresnel.x), half(0.0)) + half(1.0 - 0.04) * max(half(cc_fresnel.y), half(0.0))) * clearcoat;
+ 	cc_attenuation = half(1.0) - Fr;
+ 	specular_light += half(cc_specular_ltc) * hvec3(cc_specular_tex_color) * Fr * color * light_attenuation_ltc * specular_amount;
