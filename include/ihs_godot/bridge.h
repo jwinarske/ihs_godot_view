@@ -173,11 +173,16 @@ typedef enum IhsGodotLogLevel {
 } IhsGodotLogLevel;
 
 /*
- * Callbacks into the producer. All are invoked on the Godot main thread.
+ * Callbacks into the producer. All but engine_log are invoked on the Godot
+ * main thread.
  *   log      a module diagnostic (not Godot's own print output).
  *   message  GDScript called IhsHost.send_message(text); @utf8 is valid for
  *            the call only.
  *   mouse_mode  see below.
+ *   engine_log  Godot's own output (print, printerr, errors and warnings),
+ *            one line per call without the trailing newline, from whichever
+ *            thread printed it. When set, it replaces Godot's terminal output;
+ *            a log file enabled in the project still gets written.
  */
 typedef struct IhsGodotHostCallbacks {
   size_t struct_size;
@@ -187,6 +192,8 @@ typedef struct IhsGodotHostCallbacks {
   /* The game changed Input.mouse_mode (IhsGodotMouseMode): a host can hide
    * its cursor while the game captures the mouse. */
   void (*mouse_mode)(void* user_data, uint32_t mode);
+  /* Appended; a module older than this field never calls it. Any thread. */
+  void (*engine_log)(void* user_data, int level, const char* utf8);
 } IhsGodotHostCallbacks;
 
 /* Input.MouseMode values. */

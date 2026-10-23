@@ -16,6 +16,7 @@
 
 #include "log.h"
 
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -45,24 +46,53 @@ LogLevel Floor() {
   return floor;
 }
 
+std::atomic<LogSink> g_sink{nullptr};
+std::atomic<bool> g_stderr_only{false};
+
+void Write(LogChannel channel, LogLevel level, const char* text) {
+  if (!g_stderr_only.load(std::memory_order_acquire)) {
+    if (LogSink sink = g_sink.load(std::memory_order_acquire);
+        sink != nullptr && sink(channel, level, text, std::strlen(text))) {
+      return;
+    }
+  }
+  static const char* const kTags[] = {"E", "W", "I", "D"};
+  // Leaked: the engine thread may still log while exit() runs destructors.
+  static std::mutex* mutex = new std::mutex();
+  const std::lock_guard<std::mutex> lock(*mutex);
+  std::fprintf(stderr, "[ihs_godot_view] %s %s%s\n",
+               kTags[static_cast<int>(level)],
+               channel == LogChannel::kGodot ? "godot: " : "", text);
+  std::fflush(stderr);
+}
+
 }  // namespace
 
 void Log(LogLevel level, const char* fmt, ...) {
   if (static_cast<int>(level) > static_cast<int>(Floor())) {
     return;
   }
-  static const char* const kTags[] = {"E", "W", "I", "D"};
   char line[1024];
   va_list ap;
   va_start(ap, fmt);
   std::vsnprintf(line, sizeof(line), fmt, ap);
   va_end(ap);
-  // Leaked: the engine thread may still log while exit() runs destructors.
-  static std::mutex* mutex = new std::mutex();
-  std::lock_guard<std::mutex> lock(*mutex);
-  std::fprintf(stderr, "[ihs_godot_view] %s %s\n",
-               kTags[static_cast<int>(level)], line);
-  std::fflush(stderr);
+  Write(LogChannel::kPlugin, level, line);
+}
+
+void LogGodot(LogLevel level, const char* text) {
+  if (text == nullptr || static_cast<int>(level) > static_cast<int>(Floor())) {
+    return;
+  }
+  Write(LogChannel::kGodot, level, text);
+}
+
+void SetLogSink(LogSink sink) noexcept {
+  g_sink.store(sink, std::memory_order_release);
+}
+
+void LogToStderrOnly() {
+  g_stderr_only.store(true, std::memory_order_release);
 }
 
 }  // namespace ihs_godot

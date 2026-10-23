@@ -102,6 +102,7 @@ add_library(ihs_godot_view SHARED
         src/gbm_allocator.cc
         src/godot_runtime.cc
         src/godot_view.cc
+        src/ihs_log_sink.cc
         src/plugin.cc
         src/vk_image_pool.cc
 )
