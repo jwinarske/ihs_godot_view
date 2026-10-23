@@ -112,10 +112,34 @@ bool IhsSink(LogChannel channel, LogLevel level, const char* text, size_t len) {
   return true;
 }
 
+// Opening a context fails once the shell has stopped its logging service.
+// Each open takes a slot in the service's handle table, so this is asked once
+// (LogProcessExiting), not per line.
+bool IhsRunning() {
+  const IhsLoggingApi* logging = Logging();
+  if (logging == nullptr) {
+    return false;
+  }
+  const Channel& channel = g_channels[0];
+  IhsLogContextOptions options{};
+  options.struct_size = sizeof(options);
+  options.description = channel.description;
+  return logging->context_open(channel.tag, &options) >= 0;
+}
+
+void IhsFlush() {
+  const IhsLoggingApi* logging = Logging();
+  if (logging != nullptr && logging->flush != nullptr) {
+    logging->flush();
+  }
+}
+
+constexpr LogSink kIhsSink{&IhsSink, &IhsRunning, &IhsFlush};
+
 // Removed again when the plugin's statics are destroyed at exit, so a late
 // line from the engine thread goes to stderr, not to a sink being torn down.
 struct InstallSink {
-  InstallSink() noexcept { SetLogSink(&IhsSink); }
+  InstallSink() noexcept { SetLogSink(&kIhsSink); }
   ~InstallSink() { SetLogSink(nullptr); }
 };
 const InstallSink g_install_sink;

@@ -316,14 +316,16 @@ contexts:
 * `GODT`: libgodot. That covers the ihs module's diagnostics and Godot's own
   output (`print`, `printerr`, errors and warnings), one record per line.
   Godot's terminal output is replaced, and a log file enabled in the project
-  (`debug/file_logging/enable_file_logging`) is still written.
+  (`debug/file_logging/enable_file_logging`) is still written. What Godot
+  writes straight to stdout or stderr, early in its start-up and during its
+  final cleanup, comes here too (`godot/patches/0006-stdio-print-hook.patch`).
 
 `IHS_GODOT_VIEW_LOG` is a floor applied before either. Lines go to stderr
-instead (prefixed `[ihs_godot_view]`) in three cases: before the shell has
-started its logging, once the process is exiting (the shell stops the service
-before it returns from `main`), and when the shell has no logging service. A
-few messages from Godot's start-up and final cleanup bypass its loggers and
-are always written to stderr by Godot itself.
+instead (prefixed `[ihs_godot_view]`) when the shell has not started its
+logging yet or has none, and while the process exits under a shell that stops
+the service before it returns from `main`. A shell that leaves the stop to the
+service's own exit handler keeps the plugin's exit lines, such as the engine
+shutdown at exit, in the log.
 
 ## Tests
 
@@ -395,6 +397,13 @@ cmake --build build/test && ctest --test-dir build/test --output-on-failure
   `godot/patches/0005-shadow-atlas-depth-reads-nearest.patch` reads them
   with a nearest sampler; shadows differ only in sparse penumbra pixels.
   Volumetric fog (Forward+ only) still reads the atlases linearly.
+* **Output outside Godot's loggers.** Until modules initialize, Godot's
+  output goes through its terminal logger, and before its OS layer is up,
+  during its final cleanup, and while a print is already in progress, it
+  writes prints and errors straight to stdout or stderr. A host that collects
+  only its own log loses all of it, such as an error loading the main pack.
+  `godot/patches/0006-stdio-print-hook.patch` lets the module take that
+  output too, so it reaches the `GODT` context (see Logging).
 * **Engine patch.** Upstream, a RenderingDevice without a window runs a
   single frame in flight and skips Godot's pipeline cache, so the CPU waits
   for every GPU frame and shaders compile at each launch.

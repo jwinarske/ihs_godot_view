@@ -46,13 +46,14 @@ LogLevel Floor() {
   return floor;
 }
 
-std::atomic<LogSink> g_sink{nullptr};
+std::atomic<const LogSink*> g_sink{nullptr};
 std::atomic<bool> g_stderr_only{false};
 
 void Write(LogChannel channel, LogLevel level, const char* text) {
   if (!g_stderr_only.load(std::memory_order_acquire)) {
-    if (LogSink sink = g_sink.load(std::memory_order_acquire);
-        sink != nullptr && sink(channel, level, text, std::strlen(text))) {
+    if (const LogSink* sink = g_sink.load(std::memory_order_acquire);
+        sink != nullptr &&
+        sink->write(channel, level, text, std::strlen(text))) {
       return;
     }
   }
@@ -87,12 +88,27 @@ void LogGodot(LogLevel level, const char* text) {
   Write(LogChannel::kGodot, level, text);
 }
 
-void SetLogSink(LogSink sink) noexcept {
+void SetLogSink(const LogSink* sink) noexcept {
   g_sink.store(sink, std::memory_order_release);
 }
 
-void LogToStderrOnly() {
-  g_stderr_only.store(true, std::memory_order_release);
+void LogProcessExiting() {
+  // Exit handlers can be registered more than once; the answer holds for all.
+  static std::atomic<bool> asked{false};
+  if (asked.exchange(true, std::memory_order_acq_rel)) {
+    return;
+  }
+  const LogSink* sink = g_sink.load(std::memory_order_acquire);
+  if (sink == nullptr || !sink->running()) {
+    g_stderr_only.store(true, std::memory_order_release);
+  }
+}
+
+void LogFlush() {
+  if (const LogSink* sink = g_sink.load(std::memory_order_acquire);
+      sink != nullptr && !g_stderr_only.load(std::memory_order_acquire)) {
+    sink->flush();
+  }
 }
 
 }  // namespace ihs_godot

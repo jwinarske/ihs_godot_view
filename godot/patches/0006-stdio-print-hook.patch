@@ -1,0 +1,196 @@
+Print: let an embedder take the output Godot writes to stdout and stderr
+
+Some of Godot's output is written straight to stdout or stderr: whatever
+goes through the terminal logger (StdLogger), and the fallback that
+print_line, print_raw, print_error and the error macros use before the
+OS is initialized, during final cleanup (print_ready false), and while
+a print or an error is already being printed. An embedder that routes
+Godot's output into its own log can replace the OS loggers once modules
+initialize, but the output before that and after cleanup starts still
+reaches stdio. In a process where only the host's log is collected, it
+is lost: for example, an error loading the main pack.
+
+Add set_stdio_print_func(). When a function is set, those paths hand it
+the text they would have written, newlines included, typed as output,
+error or warning, instead of writing it. The error fallback puts each
+error and its location on one line. The Unix terminal logger leaves out
+its color codes. Without a function, the output is unchanged.
+
+The ihs module sets it in the bridge's configure(), before the engine
+is created, when the host passes an engine_log callback.
+
+Applied by godot/CMakeLists.txt on top of GODOT_GIT_REF, after 0005.
+
+diff --git a/core/error/error_macros.cpp b/core/error/error_macros.cpp
+index 5f7098c..8adc096 100644
+--- a/core/error/error_macros.cpp
++++ b/core/error/error_macros.cpp
+@@ -35,6 +35,7 @@
+ #include "core/object/object_id.h"
+ #include "core/object/script_language.h"
+ #include "core/os/os.h"
++#include "core/string/print_string.h"
+ #include "core/string/ustring.h"
+ 
+ #include <cstdio>
+@@ -49,6 +50,21 @@ static ErrorHandlerList *error_handler_list = nullptr;
+ static thread_local bool is_printing_error = false;
+ 
+ static void _err_print_fallback(const char *p_function, const char *p_file, int p_line, const char *p_error_details, ErrorHandlerType p_type, bool p_reentrance) {
++	if (is_stdio_print_func_set()) {
++		const StdioPrintType type = p_type == ERR_HANDLER_WARNING ? STDIO_PRINT_WARNING : STDIO_PRINT_ERROR;
++		// One line per error, with its location, for a log that keeps lines apart.
++		char line[1024];
++		if (p_function && p_file) {
++			snprintf(line, sizeof(line), "%s: %s (at %s, %s:%i)\n", _error_handler_type_string(p_type), p_error_details, p_function, p_file, p_line);
++		} else {
++			snprintf(line, sizeof(line), "%s: %s\n", _error_handler_type_string(p_type), p_error_details);
++		}
++		if ((!p_reentrance || _stdio_print_to_func("While attempting to print an error, another error was printed:\n", type)) &&
++				_stdio_print_to_func(line, type)) {
++			return;
++		}
++	}
++
+ 	if (p_reentrance) {
+ 		fprintf(stderr, "While attempting to print an error, another error was printed:\n");
+ 	}
+diff --git a/core/io/logger.cpp b/core/io/logger.cpp
+index 19c820b..d930114 100644
+--- a/core/io/logger.cpp
++++ b/core/io/logger.cpp
+@@ -35,6 +35,7 @@
+ #include "core/io/file_access.h"
+ #include "core/object/script_backtrace.h"
+ #include "core/os/time.h"
++#include "core/string/print_string.h"
+ #include "core/string/regex.h"
+ #include "core/templates/rb_set.h"
+ 
+@@ -215,6 +216,30 @@ void StdLogger::logv(const char *p_format, va_list p_list, bool p_err) {
+ 		return;
+ 	}
+ 
++	if (is_stdio_print_func_set()) {
++		const int static_buf_size = 512;
++		char static_buf[static_buf_size];
++		char *buf = static_buf;
++		// Formatted from copies: p_list is still needed if the text is not taken.
++		va_list list_copy;
++		va_copy(list_copy, p_list);
++		const int len = vsnprintf(buf, static_buf_size, p_format, list_copy);
++		va_end(list_copy);
++		if (len >= static_buf_size) {
++			buf = (char *)Memory::alloc_static(len + 1);
++			va_copy(list_copy, p_list);
++			vsnprintf(buf, len + 1, p_format, list_copy);
++			va_end(list_copy);
++		}
++		const bool taken = len >= 0 && _stdio_print_to_func(buf, p_err ? STDIO_PRINT_ERROR : STDIO_PRINT_OUTPUT);
++		if (len >= static_buf_size) {
++			Memory::free_static(buf);
++		}
++		if (taken) {
++			return;
++		}
++	}
++
+ 	if (p_err) {
+ 		vfprintf(stderr, p_format, p_list);
+ 	} else {
+diff --git a/core/string/print_string.cpp b/core/string/print_string.cpp
+index 67239a9..f3142a7 100644
+--- a/core/string/print_string.cpp
++++ b/core/string/print_string.cpp
+@@ -33,12 +33,37 @@
+ #include "core/core_globals.h"
+ #include "core/os/os.h"
+ 
++#include <atomic>
+ #include <cstdio>
+ 
+ static PrintHandlerList *print_handler_list = nullptr;
+ static thread_local bool is_printing = false;
++static std::atomic<StdioPrintFunc> stdio_print_func = nullptr;
++
++void set_stdio_print_func(StdioPrintFunc p_func) {
++	stdio_print_func.store(p_func, std::memory_order_release);
++}
++
++bool is_stdio_print_func_set() {
++	return stdio_print_func.load(std::memory_order_acquire) != nullptr;
++}
++
++bool _stdio_print_to_func(const char *p_text, StdioPrintType p_type) {
++	const StdioPrintFunc func = stdio_print_func.load(std::memory_order_acquire);
++	if (!func) {
++		return false;
++	}
++	func(p_text, p_type);
++	return true;
++}
+ 
+ static void __print_fallback(const String &p_string, bool p_err, bool p_reentrance) {
++	const StdioPrintType type = p_err ? STDIO_PRINT_ERROR : STDIO_PRINT_OUTPUT;
++	if ((!p_reentrance || _stdio_print_to_func("While attempting to print an error, another error was printed:\n", type)) &&
++			_stdio_print_to_func((p_string + "\n").utf8().get_data(), type)) {
++		return;
++	}
++
+ 	if (p_reentrance) {
+ 		fprintf(p_err ? stderr : stdout, "While attempting to print an error, another error was printed:\n");
+ 	}
+diff --git a/core/string/print_string.h b/core/string/print_string.h
+index 673e2d7..5a0078d 100644
+--- a/core/string/print_string.h
++++ b/core/string/print_string.h
+@@ -51,6 +51,26 @@ String stringify_variants(const Span<Variant> &p_vars);
+ void add_print_handler(PrintHandlerList *p_handler);
+ void remove_print_handler(const PrintHandlerList *p_handler);
+ 
++// Some of Godot's output is written straight to stdout or stderr: whatever goes
++// through the terminal logger, and the fallback used before the OS is
++// initialized, during final cleanup, and while a print is already in progress.
++// An embedder whose output must reach its own log can take that text instead.
++// The function gets the text as it would have been written, newlines included
++// (one call may hold several lines or part of one), from any thread, and must
++// not print through Godot.
++enum StdioPrintType {
++	STDIO_PRINT_OUTPUT,
++	STDIO_PRINT_ERROR,
++	STDIO_PRINT_WARNING,
++};
++typedef void (*StdioPrintFunc)(const char *p_text, StdioPrintType p_type);
++
++// nullptr writes to stdout and stderr again.
++void set_stdio_print_func(StdioPrintFunc p_func);
++bool is_stdio_print_func_set();
++// Hands p_text to the function; false when none is set.
++bool _stdio_print_to_func(const char *p_text, StdioPrintType p_type);
++
+ extern void __print_line(const String &p_string);
+ extern void __print_line_rich(const String &p_string);
+ extern void print_raw(const String &p_string);
+diff --git a/drivers/unix/os_unix.cpp b/drivers/unix/os_unix.cpp
+index 86af7ba..1b38d88 100644
+--- a/drivers/unix/os_unix.cpp
++++ b/drivers/unix/os_unix.cpp
+@@ -35,6 +35,7 @@
+ #include "core/debugger/engine_debugger.h"
+ #include "core/debugger/script_debugger.h"
+ #include "core/string/char_utils.h"
++#include "core/string/print_string.h"
+ #include "drivers/unix/dir_access_unix.h"
+ #include "drivers/unix/file_access_unix.h"
+ #include "drivers/unix/file_access_unix_pipe.h"
+@@ -1236,8 +1237,8 @@ void UnixTerminalLogger::log_error(const char *p_function, const char *p_file, i
+ 
+ 	// Disable color codes if stdout is not a TTY.
+ 	// This prevents Godot from writing ANSI escape codes when redirecting
+-	// stdout and stderr to a file.
+-	const bool tty = isatty(fileno(stdout));
++	// stdout and stderr to a file, or when an embedder takes the text instead.
++	const bool tty = isatty(fileno(stdout)) && !is_stdio_print_func_set();
+ 	const char *gray = tty ? "\E[0;90m" : "";
+ 	const char *red = tty ? "\E[0;91m" : "";
+ 	const char *red_bold = tty ? "\E[1;31m" : "";

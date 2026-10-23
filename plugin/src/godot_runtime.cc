@@ -273,9 +273,9 @@ void GodotRuntime::StopAtExit() {
 }
 
 void GodotRuntime::OnExit(int status, void* /*arg*/) {
-  // The shell stops its logging service before it returns from main, so
-  // whatever is logged from here on goes to stderr.
-  LogToStderrOnly();
+  // An older shell stops its logging service before it returns from main;
+  // then whatever is logged from here on goes to stderr.
+  LogProcessExiting();
   GodotRuntime& self = Get();
   std::unique_lock<std::mutex> lock(self.mutex_);
   if (!self.thread_.joinable() ||
@@ -300,6 +300,7 @@ void GodotRuntime::OnExit(int status, void* /*arg*/) {
   }
   if (why != nullptr) {
     LOG_W("Godot %s; exiting without shutting it down", why);
+    LogFlush();
     std::fflush(nullptr);
     ::_exit(status);
   }

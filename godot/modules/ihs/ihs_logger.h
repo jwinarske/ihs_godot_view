@@ -7,6 +7,7 @@
 #pragma once
 
 #include "core/io/logger.h"
+#include "core/string/print_string.h"
 
 // Godot's own output (print, printerr, errors, warnings) handed to the host's
 // engine_log callback one line at a time, in place of the terminal logger.
@@ -19,4 +20,11 @@ public:
 	// engine_log callback. Call once the OS exists and before Main adds the
 	// project's file logger (MODULE_INITIALIZATION_LEVEL_CORE).
 	static void install_if_requested();
+
+	// Godot's stdio print function (set_stdio_print_func): what it would
+	// otherwise write straight to stdout or stderr, through the terminal logger
+	// until install_if_requested() replaces it, and before the OS exists and
+	// during final cleanup. Set from configure() when the host passed an
+	// engine_log callback.
+	static void stdio_print(const char *p_text, StdioPrintType p_type);
 };
