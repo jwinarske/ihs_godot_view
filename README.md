@@ -361,6 +361,13 @@ cmake --build build/test && ctest --test-dir build/test --output-on-failure
   enables the extension when the device offers it and otherwise compiles
   for SPIR-V 1.3. The shader cache is keyed on the version, so shaders
   cached before the patch are compiled again on first launch.
+* **Area-light lookup tables without linear float filtering.** The
+  AreaLight3D lookup tables are 32-bit float textures read through a linear
+  sampler, and linear filtering of that format is optional in Vulkan; on a
+  device without it the validation layer flags every scene draw and the
+  filtered value is undefined.
+  `godot/patches/0004-area-light-ltc-lut-manual-bilinear.patch` fetches the
+  four texels and interpolates them in the shader instead, on every device.
 * **Engine patch.** Upstream, a RenderingDevice without a window runs a
   single frame in flight and skips Godot's pipeline cache, so the CPU waits
   for every GPU frame and shaders compile at each launch.
