@@ -368,6 +368,13 @@ cmake --build build/test && ctest --test-dir build/test --output-on-failure
   filtered value is undefined.
   `godot/patches/0004-area-light-ltc-lut-manual-bilinear.patch` fetches the
   four texels and interpolates them in the shader instead, on every device.
+* **Shadow atlas depth reads without linear depth filtering.** The
+  soft-shadow blocker search and the transmittance depth reads sample the
+  shadow atlases (16- or 32-bit depth) through a linear sampler, and linear
+  filtering of depth formats is optional in Vulkan.
+  `godot/patches/0005-shadow-atlas-depth-reads-nearest.patch` reads them
+  with a nearest sampler; shadows differ only in sparse penumbra pixels.
+  Volumetric fog (Forward+ only) still reads the atlases linearly.
 * **Engine patch.** Upstream, a RenderingDevice without a window runs a
   single frame in flight and skips Godot's pipeline cache, so the CPU waits
   for every GPU frame and shaders compile at each launch.
