@@ -6,14 +6,14 @@
 
 #pragma once
 
-#include <ihs_godot/bridge.h>
-
 #include "core/math/vector2.h"
 #include "core/math/vector2i.h"
 #include "core/os/mutex.h"
 #include "core/string/ustring.h"
 #include "core/templates/local_vector.h"
 #include "core/templates/vector.h"
+
+#include <ihs_godot/bridge.h>
 
 // What the display server's renderer can do with targets. One implementation
 // per rendering API (ihs_capture_rd.cpp, ihs_capture_gles3.cpp), created by

@@ -6,9 +6,9 @@
 
 #pragma once
 
-#include <ihs_godot/bridge.h>
-
 #include "servers/display/display_server_headless.h"
+
+#include <ihs_godot/bridge.h>
 
 class IhsCaptureBackend;
 class IhsEgl;
