@@ -8,11 +8,10 @@
 
 #if defined(VULKAN_ENABLED)
 
-#include "drivers/vulkan/vulkan_hooks.h"
-
+#include "core/string/ustring.h"
 #include "core/templates/local_vector.h"
 #include "core/templates/vector.h"
-#include "core/string/ustring.h"
+#include "drivers/vulkan/vulkan_hooks.h"
 
 // Takes over instance/physical-device/device creation for Godot's Vulkan
 // driver (the same seam OpenXR uses) so that:
