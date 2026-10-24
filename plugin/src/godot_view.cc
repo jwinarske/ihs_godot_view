@@ -17,11 +17,13 @@
 #include "godot_view.h"
 
 #include <sys/mman.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <cerrno>
 #include <cinttypes>
 #include <cstring>
+#include <ctime>
 
 #include "fence.h"
 #include "godot_runtime.h"
@@ -35,6 +37,31 @@ namespace {
 constexpr uint32_t kABGR8888 = 0x34324241;  // 'AB24': R,G,B,A bytes
 constexpr int kReleaseWaitMs = 100;
 constexpr uint32_t kMinSize = 16;
+
+uint64_t NowNs() {
+  timespec ts{};
+  ::clock_gettime(CLOCK_MONOTONIC, &ts);
+  return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL +
+         static_cast<uint64_t>(ts.tv_nsec);
+}
+
+void CloseFd(int fd) {
+  ::close(fd);
+}
+
+double Ms(uint64_t ns) {
+  return static_cast<double>(ns) / 1e6;
+}
+
+void LogLatency(int32_t id, const char* what, const FrameLatency::Report& r) {
+  LOG_I("view %d: latency %s: shown %" PRIu64 " replaced %" PRIu64
+        " flags 0x%x; to photon p50/p99/max ms: frame %.2f/%.2f/%.2f "
+        "submit %.2f/%.2f/%.2f gpu %.2f/%.2f/%.2f (gpu n=%zu)",
+        id, what, r.shown, r.replaced, r.flags, Ms(r.frame.p50_ns),
+        Ms(r.frame.p99_ns), Ms(r.frame.max_ns), Ms(r.submit.p50_ns),
+        Ms(r.submit.p99_ns), Ms(r.submit.max_ns), Ms(r.gpu.p50_ns),
+        Ms(r.gpu.p99_ns), Ms(r.gpu.max_ns), r.gpu.count);
+}
 
 const char* KindName(uint32_t kind, SurfacePath path) {
   switch (kind) {
@@ -94,6 +121,11 @@ std::shared_ptr<GodotView> GodotView::Create(const IhsPvCreateInfo* info,
       ihs_pv_assets_path != nullptr ? ihs_pv_assets_path() : nullptr;
   v->params_ = ParseViewParams(info->params, info->params_size, assets);
   ApplyEnvironment(v->params_);
+  if (v->params_.latency_window > 0) {
+    v->latency_ = std::make_unique<FrameLatency>(
+        FrameLatency::FenceOps{&FenceSignalTimeNs, &CloseFd},
+        static_cast<size_t>(v->params_.latency_window));
+  }
 
   // The shell may create at 1x1 and send the real size with the first
   // resize; anything that small is "not known yet".
@@ -250,9 +282,16 @@ void GodotView::Dispose() {
   GodotRuntime::Get().Detach(id_);
 }
 
-void GodotView::OnPresented(uint32_t refresh_ns) {
+void GodotView::OnPresented(uint64_t seq,
+                            uint64_t ust_ns,
+                            uint32_t refresh_ns,
+                            uint32_t flags) {
   if (refresh_ns != 0) {
     refresh_ns_ = refresh_ns;
+  }
+  FrameLatency::Report r;
+  if (latency_ && seq != 0 && latency_->Presented(seq, ust_ns, flags, &r)) {
+    LogLatency(id_, "window", r);
   }
 }
 
@@ -705,6 +744,7 @@ uint32_t GodotView::BeginFrame() {
     DmabufSyncBegin(s.shm_fd.get(), true);
   }
   active_slot_ = static_cast<int>(next_slot_);
+  frame_begin_ns_ = latency_ ? NowNs() : 0;
   return s.target_id;
 }
 
@@ -735,6 +775,10 @@ bool GodotView::Submit(Slot& slot, int acquire_fence_fd) {
   }
   int release = -1;
   int rc = IHS_PV_ERR_INVALID;
+  // Under latency measurement: the frame's seq and a dup of its acquire
+  // fence, whose signal time is read once the frame is shown.
+  uint64_t seq = 0;
+  UniqueFd fence_dup;
 
   switch (current_->path) {
     case SurfacePath::kDmabuf:
@@ -777,7 +821,25 @@ bool GodotView::Submit(Slot& slot, int acquire_fence_fd) {
         }
         acquire.reset();  // CPU writes are done; shm takes no fence.
       }
-      rc = ihs_pv_submit(pv_, &f, acquire.release(), &release);
+      if (slot.dmabuf && ihs_pv_submit_layers != nullptr) {
+        // ihs_pv_submit's one-layer case, but with a seq, so presented
+        // says which frame it showed.
+        IhsLayer layer{};
+        layer.struct_size = sizeof(layer);
+        layer.layer_id = 0;
+        layer.transform = IHS_TRANSFORM_NORMAL;
+        layer.frame = &f;
+        seq = ++seq_;
+        if (latency_) {
+          fence_dup = acquire.Dup();
+        }
+        layer.acquire_fence_fd = acquire.release();
+        int fences[1] = {-1};
+        rc = ihs_pv_submit_layers(pv_, &layer, 1, seq, fences);
+        release = fences[0];
+      } else {
+        rc = ihs_pv_submit(pv_, &f, acquire.release(), &release);
+      }
       break;
     }
 
@@ -807,9 +869,13 @@ bool GodotView::Submit(Slot& slot, int acquire_fence_fd) {
         egl_image.external_oes = 0;
         layer.image = &egl_image;
       }
+      seq = ++seq_;
+      if (latency_) {
+        fence_dup = acquire.Dup();
+      }
       layer.acquire_fence_fd = acquire.release();
       int fences[1] = {-1};
-      rc = ihs_pv_submit_layers(pv_, &layer, 1, ++seq_, fences);
+      rc = ihs_pv_submit_layers(pv_, &layer, 1, seq, fences);
       release = fences[0];
       break;
     }
@@ -831,6 +897,9 @@ bool GodotView::Submit(Slot& slot, int acquire_fence_fd) {
   }
   submit_errors_ = 0;
   slot.release_fence.reset(release);
+  if (latency_ && seq != 0) {
+    latency_->Submitted(seq, frame_begin_ns_, NowNs(), fence_dup.release());
+  }
   return true;
 }
 
@@ -868,6 +937,10 @@ void GodotView::EmitSurface(const Negotiated& n, bool first) {
 }
 
 void GodotView::Teardown() {
+  FrameLatency::Report r;
+  if (latency_ && latency_->Session(&r)) {
+    LogLatency(id_, "session", r);
+  }
   ReleaseRing(/*retire=*/false);
   vk_pool_.reset();
   current_.reset();

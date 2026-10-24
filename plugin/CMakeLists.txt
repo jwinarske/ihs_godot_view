@@ -80,6 +80,7 @@ endif ()
 
 set(CORE_SOURCES
         src/codec.cc
+        src/frame_latency.cc
         src/input_map.cc
         src/log.cc
         src/surface_policy.cc

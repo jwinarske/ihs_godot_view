@@ -68,12 +68,12 @@ void OnRenegotiate(void* user_data) {
 }
 
 void OnPresented(void* user_data,
-                 uint64_t /*seq*/,
-                 uint64_t /*ust_ns*/,
+                 uint64_t seq,
+                 uint64_t ust_ns,
                  uint32_t refresh_ns,
                  uint64_t /*msc*/,
-                 uint32_t /*flags*/) {
-  ViewOf(user_data)->OnPresented(refresh_ns);
+                 uint32_t flags) {
+  ViewOf(user_data)->OnPresented(seq, ust_ns, refresh_ns, flags);
 }
 
 // The last call for this view. Once it returns no submit for it is in

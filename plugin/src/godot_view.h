@@ -27,6 +27,7 @@
 #include <ihs_godot/bridge.h>
 
 #include "egl_image_importer.h"
+#include "frame_latency.h"
 #include "gbm_allocator.h"
 #include "surface_policy.h"
 #include "unique_fd.h"
@@ -83,7 +84,10 @@ class GodotView : public std::enable_shared_from_this<GodotView> {
   void OnRenegotiate();
   void Dispose();
   // --- display thread ---
-  void OnPresented(uint32_t refresh_ns);
+  void OnPresented(uint64_t seq,
+                   uint64_t ust_ns,
+                   uint32_t refresh_ns,
+                   uint32_t flags);
 
   // --- engine thread ---
   // Godot is running: record what it can render into and negotiate.
@@ -192,10 +196,16 @@ class GodotView : public std::enable_shared_from_this<GodotView> {
   uint64_t seq_ = 0;
   uint64_t submit_errors_ = 0;
   uint64_t fence_timeouts_ = 0;
+  // When the frame being drawn started (FrameLatency), 0 when not measured.
+  uint64_t frame_begin_ns_ = 0;
   GbmAllocator gbm_;
   std::shared_ptr<VkImagePool> vk_pool_;
   EglImageImporter egl_importer_;
   bool announced_ = false;
+
+  // IHS_GODOT_VIEW_LATENCY; set in Create, then read from the engine and
+  // display threads (it locks itself).
+  std::unique_ptr<FrameLatency> latency_;
 };
 
 }  // namespace ihs_godot

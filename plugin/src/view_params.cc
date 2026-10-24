@@ -16,6 +16,8 @@
 
 #include "view_params.h"
 
+#include <algorithm>
+#include <cerrno>
 #include <cstdlib>
 #include <sstream>
 
@@ -169,6 +171,18 @@ void ApplyEnvironment(ViewParams& p) {
   }
   if (const char* v = Env("IHS_GODOT_MAX_FPS")) {
     p.max_fps = std::atoi(v);
+  }
+  if (const char* v = Env("IHS_GODOT_VIEW_LATENCY")) {
+    constexpr long kDefaultWindow = 300;
+    constexpr long kMaxWindow = 100000;
+    char* end = nullptr;
+    errno = 0;
+    const long n = std::strtol(v, &end, 10);
+    const bool number = end != v && *end == '\0' && errno == 0;
+    p.latency_window =
+        static_cast<int>(number && n == 0   ? 0
+                         : number && n >= 2 ? std::min(n, kMaxWindow)
+                                            : kDefaultWindow);
   }
 }
 
