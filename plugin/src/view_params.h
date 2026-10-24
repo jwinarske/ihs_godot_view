@@ -56,6 +56,9 @@ struct ViewParams {
   std::string libgodot;
   int max_fps = 0;
   int buffers = 3;
+  // Log how long frames take to reach the screen (FrameLatency), a report
+  // every latency_window frames shown; 0 is off.
+  int latency_window = 0;
 };
 
 // @assets_path may be null. Unknown keys are ignored; malformed params
@@ -66,7 +69,9 @@ ViewParams ParseViewParams(const uint8_t* data,
 
 // IHS_GODOT_MAIN_PACK, IHS_GODOT_PATH, IHS_GODOT_ARGS (space separated),
 // IHS_GODOT_RENDERING_DRIVER, IHS_GODOT_RENDERING_METHOD, IHS_GODOT_SURFACE,
-// IHS_GODOT_LIBRARY, IHS_GODOT_MAX_FPS. A variable that is set wins.
+// IHS_GODOT_LIBRARY, IHS_GODOT_MAX_FPS, IHS_GODOT_VIEW_LATENCY (frames per
+// report, 2 to 100000; any other value but 0 means 300). A variable that is set
+// wins.
 void ApplyEnvironment(ViewParams& params);
 
 // argv for libgodot, argv[0] included.

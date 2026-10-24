@@ -15,8 +15,8 @@
  */
 
 // Unit tests for the parts of the producer that need neither a GPU nor a
-// running shell: creation-param decoding, touch decoding, and the surface
-// selection policy.
+// running shell: creation-param decoding, touch decoding, the surface
+// selection policy, and frame-latency matching.
 
 #include <cmath>
 #include <cstdio>
@@ -29,6 +29,7 @@
 #include <ihs_godot/bridge.h>
 
 #include "../src/codec.h"
+#include "../src/frame_latency.h"
 #include "../src/input_map.h"
 #include "../src/surface_policy.h"
 #include "../src/view_params.h"
@@ -348,6 +349,116 @@ TEST(GrantMapping) {
         SurfacePath::kDmabuf);
   CHECK(PathForGrant(IHS_PV_KIND_SOFTWARE_SHM) == SurfacePath::kShm);
   CHECK(PathForGrant(0) == SurfacePath::kNone);
+}
+
+// --- frame latency ---------------------------------------------------------
+
+constexpr uint64_t kMs = 1000000;
+
+// Fences are fake: the "fd" is the signal time in ms, -1 for none. Closes are
+// counted, so every fence taken is closed exactly once.
+int g_closed = 0;
+uint64_t FakeSignal(int fd) {
+  return fd > 0 ? static_cast<uint64_t>(fd) * kMs : 0;
+}
+void FakeClose(int /*fd*/) {
+  ++g_closed;
+}
+constexpr FrameLatency::FenceOps kFakeOps{&FakeSignal, &FakeClose};
+
+TEST(LatencyMatchesSeqAndReportsAWindow) {
+  g_closed = 0;
+  FrameLatency l(kFakeOps, 2);
+  FrameLatency::Report r;
+  // begin 100, submit 110, gpu 115, shown 130 ms.
+  l.Submitted(1, 100 * kMs, 110 * kMs, 115);
+  CHECK(!l.Presented(1, 130 * kMs, 0x7, &r));
+  l.Submitted(2, 116 * kMs, 126 * kMs, 131);
+  CHECK(l.Presented(2, 150 * kMs, 0x7, &r));
+  CHECK(r.shown == 2 && r.replaced == 0 && r.flags == 0x7);
+  CHECK(r.frame.count == 2 && r.frame.p50_ns == 30 * kMs &&
+        r.frame.max_ns == 34 * kMs);
+  CHECK(r.submit.p50_ns == 20 * kMs && r.submit.max_ns == 24 * kMs);
+  CHECK(r.gpu.p50_ns == 15 * kMs && r.gpu.max_ns == 19 * kMs);
+  CHECK(g_closed == 2);
+}
+
+TEST(LatencySkippedSeqIsReplaced) {
+  g_closed = 0;
+  FrameLatency l(kFakeOps, 100);
+  FrameLatency::Report r;
+  l.Submitted(1, 10 * kMs, 11 * kMs, -1);
+  l.Submitted(2, 20 * kMs, 21 * kMs, 22);
+  l.Submitted(3, 30 * kMs, 31 * kMs, 32);
+  l.Presented(3, 40 * kMs, 0, &r);  // 1 and 2 were never shown
+  l.Presented(2, 41 * kMs, 0, &r);  // late or repeated: ignored
+  l.Presented(9, 42 * kMs, 0, &r);  // not recorded here
+  CHECK(l.Session(&r));
+  CHECK(r.shown == 1 && r.replaced == 2);
+  CHECK(r.frame.count == 1 && r.frame.p50_ns == 10 * kMs);
+  CHECK(r.gpu.count == 1 && r.gpu.p50_ns == 8 * kMs);
+  CHECK(g_closed == 2);  // the -1 fence was never closed
+}
+
+TEST(LatencyUnknownTimesAreLeftOut) {
+  g_closed = 0;
+  FrameLatency l(kFakeOps, 100);
+  FrameLatency::Report r;
+  l.Submitted(1, 0, 11 * kMs, -1);  // begin not measured, no fence
+  l.Presented(1, 20 * kMs, 0, &r);
+  l.Submitted(2, 30 * kMs, 31 * kMs, 50);  // fence "after" the photon
+  l.Presented(2, 40 * kMs, 0, &r);
+  CHECK(l.Session(&r));
+  CHECK(r.shown == 2);
+  CHECK(r.frame.count == 1 && r.submit.count == 2 && r.gpu.count == 0);
+}
+
+TEST(LatencyStubFenceTimeIsLeftOut) {
+  g_closed = 0;
+  FrameLatency l(kFakeOps, 100);
+  FrameLatency::Report r;
+  l.Submitted(1, 30 * kMs, 31 * kMs, 5);  // "signaled" before the frame began
+  l.Presented(1, 40 * kMs, 0, &r);
+  CHECK(l.Session(&r));
+  CHECK(r.frame.count == 1 && r.gpu.count == 0);
+  CHECK(g_closed == 1);
+}
+
+TEST(LatencyBoundsWhatIsPending) {
+  g_closed = 0;
+  FrameLatency::Report r;
+  {
+    FrameLatency l(kFakeOps, 100);
+    for (uint64_t seq = 1; seq <= 40; seq++) {
+      l.Submitted(seq, seq * kMs, seq * kMs, 1);
+    }
+    CHECK(!l.Session(&r));  // nothing shown
+    CHECK(g_closed == 24);  // 16 kept
+  }
+  CHECK(g_closed == 40);  // the rest closed with it
+}
+
+TEST(LatencyEnvironmentSwitch) {
+  ViewParams p;
+  ::setenv("IHS_GODOT_VIEW_LATENCY", "1", 1);
+  ApplyEnvironment(p);
+  CHECK(p.latency_window == 300);
+  ::setenv("IHS_GODOT_VIEW_LATENCY", "30", 1);
+  ApplyEnvironment(p);
+  CHECK(p.latency_window == 30);
+  ::setenv("IHS_GODOT_VIEW_LATENCY", "yes", 1);
+  ApplyEnvironment(p);
+  CHECK(p.latency_window == 300);
+  ::setenv("IHS_GODOT_VIEW_LATENCY", "99999999999999999999", 1);
+  ApplyEnvironment(p);
+  CHECK(p.latency_window == 300);
+  ::setenv("IHS_GODOT_VIEW_LATENCY", "5000000", 1);
+  ApplyEnvironment(p);
+  CHECK(p.latency_window == 100000);
+  ::setenv("IHS_GODOT_VIEW_LATENCY", "0", 1);
+  ApplyEnvironment(p);
+  CHECK(p.latency_window == 0);
+  ::unsetenv("IHS_GODOT_VIEW_LATENCY");
 }
 
 }  // namespace

@@ -29,6 +29,11 @@ namespace ihs_godot {
 // Returns true when the fence signaled (an invalid fd counts as signaled).
 bool WaitFence(UniqueFd& fence, int timeout_ms);
 
+// When a signaled sync_file fence signaled, in CLOCK_MONOTONIC nanoseconds:
+// the latest of its fences' timestamps. 0 when it has not signaled, is not a
+// sync_file, or the driver records no time.
+uint64_t FenceSignalTimeNs(int fd);
+
 // DMA_BUF_IOCTL_SYNC around CPU access, retried on EINTR/EAGAIN.
 void DmabufSyncBegin(int fd, bool write);
 void DmabufSyncEnd(int fd, bool write);
